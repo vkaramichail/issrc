@@ -20,7 +20,8 @@ uses
   StringScanner in '..\Components\StringScanner.pas',
   ISSigFunc in '..\Components\ISSigFunc.pas',
   Shared.CommonFunc in 'Src\Shared.CommonFunc.pas',
-  Shared.FileClass in 'Src\Shared.FileClass.pas';
+  Shared.FileClass in 'Src\Shared.FileClass.pas',
+  UnsignedFunc in '..\Components\UnsignedFunc.pas';
 
 {$APPTYPE CONSOLE}
 {$SETPEOSVERSION 6.1}
@@ -57,11 +58,11 @@ begin
 
   if HandleIsConsole then begin
     var CharsWritten: DWORD;
-    WriteConsole(Handle, @S[1], Length(S), CharsWritten, nil);
+    WriteConsole(Handle, @S[1], ULength(S), CharsWritten, nil);
   end else begin
     var Utf8S := Utf8Encode(S);
     var BytesWritten: DWORD;
-    WriteFile(Handle, Utf8S[1], Length(Utf8S), BytesWritten, nil);
+    WriteFile(Handle, Utf8S[1], ULength(Utf8S), BytesWritten, nil);
   end;
 end;
 

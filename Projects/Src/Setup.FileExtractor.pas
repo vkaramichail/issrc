@@ -34,7 +34,7 @@ type
     procedure DecompressBytes(var Buffer; Count: Cardinal);
     class function FindSliceFilename(const ASlice: Integer): String;
     procedure OpenSlice(const ASlice: Integer);
-    function ReadProc(var Buf; Count: Longint): Longint;
+    function ReadProc(var Buf; Count: Cardinal): Cardinal;
     procedure SetCryptKey(const Value: TSetupEncryptionKey);
   public
     constructor Create(ADecompressorClass: TCustomDecompressorClass);
@@ -128,6 +128,10 @@ begin
     if NewFileExists(Result) then Exit;
   end;
   Result := AddBackslash(SourceDir) + F1;
+  {$IFDEF DEBUG}
+  { Also see Setup.MainFunc's InitializeSetup }
+  Result := Result.Replace('SetupCustomStyle', 'Setup');
+  {$ENDIF}
   if NewFileExists(Result) then Exit;
   Path := SourceDir;
   LogFmt('Asking user for new disk containing "%s".', [F1]);
@@ -202,15 +206,12 @@ procedure TFileExtractor.SeekTo(const FL: TSetupFileLocationEntry;
   procedure Discard(Count: Int64);
   var
     Buf: array[0..65535] of Byte;
-    BufSize: Cardinal;
   begin
     try
-      while True do begin
-        BufSize := SizeOf(Buf);
+      while Count > 0 do begin
+        var BufSize: Cardinal := SizeOf(Buf);
         if Count < BufSize then
-          BufSize := Count;
-        if BufSize = 0 then
-          Break;
+          BufSize := Cardinal(Count);
         DecompressBytes(Buf, BufSize);
         Dec(Count, BufSize);
         if Assigned(ProgressProc) then
@@ -274,11 +275,13 @@ begin
   end;
 end;
 
-function TFileExtractor.ReadProc(var Buf; Count: Longint): Longint;
+function TFileExtractor.ReadProc(var Buf; Count: Cardinal): Cardinal;
 var
   Buffer: Pointer;
   Left, Res: Cardinal;
 begin
+  if FChunkBytesLeft < 0 then  { sanity checks }
+    InternalError('TFileExtractor.ReadProc: Negative FChunkBytesLeft');
   Buffer := @Buf;
   Left := Count;
   if FChunkBytesLeft < Left then
@@ -311,8 +314,7 @@ procedure TFileExtractor.DecompressFile(const FL: TSetupFileLocationEntry;
   const VerifyChecksum: Boolean);
 var
   Context: TSHA256Context;
-  AddrOffset: LongWord;
-  BufSize: Cardinal;
+  AddrOffset: UInt32;
   Buf: array[0..65535] of Byte;
   { ^ *must* be the same buffer size used by the compiler (TCompressionHandler),
     otherwise the TransformCallInstructions call will break }
@@ -322,6 +324,8 @@ begin
   Inc(FEntered);
   try
     var BytesLeft := FL.OriginalSize;
+    if BytesLeft < 0 then  { sanity check }
+      InternalError('TFileExtractor.DecompressFile: Negative size');
 
     { To avoid file system fragmentation, preallocate all of the bytes in the
       destination file }
@@ -333,12 +337,10 @@ begin
 
     try
       AddrOffset := 0;
-      while True do begin
-        BufSize := SizeOf(Buf);
+      while BytesLeft > 0 do begin
+        var BufSize: Cardinal := SizeOf(Buf);
         if BytesLeft < BufSize then
-          BufSize := BytesLeft;
-        if BufSize = 0 then
-          Break;
+          BufSize := Cardinal(BytesLeft);
 
         DecompressBytes(Buf, BufSize);
         if floCallInstructionOptimized in FL.Flags then begin

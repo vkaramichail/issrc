@@ -14,7 +14,7 @@ interface
 uses
   Windows, SysUtils, Messages, Classes, Graphics, Controls,
   Forms, Dialogs, StdCtrls, ExtCtrls,
-  Setup.SetupForm, Shared.Struct, Shared.Int64Em, NewCheckListBox, RichEditViewer, NewStaticText,
+  Setup.SetupForm, Shared.Struct, NewCheckListBox, RichEditViewer, NewStaticText,
   NewProgressBar, Shared.SetupMessageIDs, PasswordEdit, FolderTreeView, BitmapImage,
   NewNotebook, BidiCtrls;
 
@@ -343,7 +343,7 @@ function ValidateCustomDirEdit(const AEdit: TEdit;
 implementation
 
 uses
-  ShellApi, ShlObj, Types, Generics.Collections,
+  ShellApi, ShlObj, Types, Generics.Collections, Themes,
   PathFunc, RestartManager, SHA256,
   SetupLdrAndSetup.Messages, Setup.MainForm, Setup.MainFunc, Shared.CommonFunc.Vcl,
   Shared.CommonFunc, Setup.InstFunc, Setup.SelectFolderForm, Setup.FileExtractor,
@@ -733,7 +733,7 @@ constructor TWizardForm.Create(AOwner: TComponent);
   using the FormCreate event, because if an exception is raised in FormCreate
   it's not propagated out. }
 
-  function SelectBestImage(WizardImages: TList; TargetWidth, TargetHeight: Integer): TBitmap;
+  function SelectBestImage(WizardImages: TWizardImages; TargetWidth, TargetHeight: Integer): TGraphic;
   var
     TargetArea, Difference, SmallestDifference, I: Integer;
   begin
@@ -743,7 +743,7 @@ constructor TWizardForm.Create(AOwner: TComponent);
       SmallestDifference := -1;
       Result := nil;
       for I := 0 to WizardImages.Count-1 do begin
-        Difference := Abs(TargetArea-TBitmap(WizardImages[I]).Width*TBitmap(WizardImages[I]).Height);
+        Difference := Abs(TargetArea-WizardImages[I].Width*WizardImages[I].Height);
         if (SmallestDifference = -1) or (Difference < SmallestDifference) then begin
           Result := WizardImages[I];
           SmallestDifference := Difference;
@@ -825,9 +825,20 @@ begin
   Dec(X, W1);
   BackButton.Left := X;
 
-  { Initialize wizard style }
-  if SetupHeader.WizardStyle = wsModern then begin
-    OuterNotebook.Color := clWindow;
+  { Initialize wizard style - also see TUninstallProgressForm.Initialize and TTaskDialogForm.Create }
+  var LStyle := StyleServices(Self);
+  if not LStyle.Enabled or LStyle.IsSystemStyle then
+    LStyle := nil;
+  if LStyle <> nil then begin
+    { TNewNotebook(Page) ignores VCL Styles so it needs a bit of help }
+    WelcomePage.ParentColor := True;
+    OuterNotebook.ParentColor := True;
+    FinishedPage.ParentColor := True;
+    Color := LStyle.GetStyleColor(scWindow);
+  end;
+  if shWizardModern in SetupHeader.Options then begin
+    if LStyle = nil then
+      OuterNotebook.Color := clWindow;
     Bevel1.Visible := False;
   end;
 
@@ -854,8 +865,8 @@ begin
         (such as 55x55 or 32x32) and WizardImageStretch=yes.
       - Otherwise, it's unclear what size/shape the user prefers for the
         control. Keep the default control size. }
-    var NewWidth := TBitmap(WizardSmallImages[0]).Width;
-    var NewHeight := TBitmap(WizardSmallImages[0]).Height;
+    var NewWidth := WizardSmallImages[0].Width;
+    var NewHeight := WizardSmallImages[0].Height;
     if (WizardSmallImages.Count > 1) or
        (NewWidth > 58) or
        (NewHeight > 58) then begin
@@ -880,17 +891,20 @@ begin
   end;
 
   { Initialize images }
-  WizardBitmapImage.Bitmap := SelectBestImage(WizardImages, WizardBitmapImage.Width, WizardBitmapImage.Height);
+  WizardBitmapImage.Graphic := SelectBestImage(WizardImages, WizardBitmapImage.Width, WizardBitmapImage.Height);
+  WizardBitmapImage.BackColor := SetupHeader.WizardImageBackColor;
   WizardBitmapImage.Center := True;
   WizardBitmapImage.Stretch := (shWizardImageStretch in SetupHeader.Options);
   WizardBitmapImage2.Bitmap := WizardBitmapImage.Bitmap;
+  WizardBitmapImage2.BackColor := SetupHeader.WizardImageBackColor;
   WizardBitmapImage2.Center := True;
   WizardBitmapImage2.Stretch := (shWizardImageStretch in SetupHeader.Options);
-  WizardSmallBitmapImage.Bitmap := SelectBestImage(WizardSmallImages, WizardSmallBitmapImage.Width, WizardSmallBitmapImage.Height);
+  WizardSmallBitmapImage.Graphic := SelectBestImage(WizardSmallImages, WizardSmallBitmapImage.Width, WizardSmallBitmapImage.Height);
+  WizardSmallBitmapImage.BackColor := SetupHeader.WizardSmallImageBackColor;
   WizardSmallBitmapImage.Stretch := (shWizardImageStretch in SetupHeader.Options);
-  SelectDirBitmapImage.InitializeFromIcon(HInstance, 'Z_DIRICON', SelectDirPage.Color, [32, 48, 64]); {don't localize}
-  SelectGroupBitmapImage.InitializeFromIcon(HInstance, 'Z_GROUPICON', SelectProgramGroupPage.Color, [32, 48, 64]); {don't localize}
-  PreparingErrorBitmapImage.InitializeFromIcon(HInstance, 'Z_STOPICON', PreparingPage.Color, [16, 24, 32]); {don't localize}
+  SelectDirBitmapImage.InitializeFromIcon(HInstance, PChar('Z_DIRICON' + WizardIconsPostfix), clNone, [32, 48, 64]); {don't localize}
+  SelectGroupBitmapImage.InitializeFromIcon(HInstance, PChar('Z_GROUPICON' + WizardIconsPostfix), clNone, [32, 48, 64]); {don't localize}
+  PreparingErrorBitmapImage.InitializeFromIcon(HInstance, PChar('Z_STOPICON' + WizardIconsPostfix), clNone, [16, 24, 32]); {don't localize}
 
   { Initialize wpWelcome page }
   RegisterExistingPage(wpWelcome, WelcomePage, nil, '', '');
@@ -1870,7 +1884,7 @@ function TWizardForm.PrepareToInstall(const WizardComponents, WizardTasks: TStri
     for var I := 0 to Entries[seFile].Count-1 do begin
       const FileEntry: PSetupFileEntry = Entries[seFile][I];
       if (foDownload in FileEntry.Options) and (foExtractArchive in FileEntry.Options) and
-         ShouldProcessFileEntry(SelectedComponents, SelectedComponents, FileEntry, False) then begin
+         ShouldProcessFileEntry(SelectedComponents, SelectedTasks, FileEntry, False) then begin
         if DownloadPage = nil then
           DownloadPage := GetClearedDownloadArchivesPage;
         if not(foCustomDestName in FileEntry.Options) then
@@ -2124,6 +2138,9 @@ begin
   end;
 end;
 
+type
+  TWinControlAccess = class(TWinControl);
+
 procedure TWizardForm.UpdatePage(const PageID: Integer);
 
   procedure ReadyMemoAppend(const Lines: String);
@@ -2141,12 +2158,11 @@ procedure TWizardForm.UpdatePage(const PageID: Integer);
   var
     TypeEntry: PSetupTypeEntry;
     SelectedComponents, SelectedTasks: TStringList;
-    S, MemoUserInfoInfo, MemoDirInfo, MemoGroupInfo, MemoTypeInfo, MemoComponentsInfo, MemoTasksInfo: String;
+    MemoUserInfoInfo, MemoDirInfo, MemoGroupInfo, MemoTypeInfo, MemoComponentsInfo, MemoTasksInfo: String;
     I: Integer;
   begin
-    ReadyMemo.Visible := False;
     if not (shDisableReadyMemo in SetupHeader.Options) then begin
-      ReadyMemo.Lines.Clear();
+      ReadyMemo.Lines.Clear;
 
       if shUserInfoPage in SetupHeader.Options then begin
         MemoUserInfoInfo := SetupMessages[msgReadyMemoUserInfo];
@@ -2221,14 +2237,22 @@ procedure TWizardForm.UpdatePage(const PageID: Integer);
       ReadyMemo.SelLength := 0;
     end;
 
-    if ReadyMemo.Lines.Count > 0 then begin
-      S := SetupMessages[msgReadyLabel2a];
-      ChangeReadyLabel(S);
-      ReadyMemo.Visible := True;
-    end else begin
+    { If ReadyMemo is initially invisible and remains so, graphical artifacts appear at the locations
+      of both scrollbars. The cause is unclear, but recreating the window resolves the issue.
+      Temporarily setting Visible to True first also fixes it. Maybe there's an issue in
+      TScrollingStyleHook. Note: You can make ReadyMemo initially invisible by navigating to wpReady
+      with it invisible, then clicking Back, followed by Next. }
+    const WasVisible = ReadyMemo.Visible;
+    ReadyMemo.Visible := ReadyMemo.Lines.Count > 0;
+    if ReadyMemo.IsCustomStyleActive and not WasVisible and not ReadyMemo.Visible then
+      TWinControlAccess(ReadyMemo).RecreateWnd; { RecreateWnd is public now but used to be protected }
+
+    var S: String;
+    if ReadyMemo.Visible then
+      S := SetupMessages[msgReadyLabel2a]
+    else
       S := SetupMessages[msgReadyLabel2b];
-      ChangeReadyLabel(S);
-    end;
+    ChangeReadyLabel(S);
   end;
 
 begin
@@ -2485,7 +2509,7 @@ procedure TWizardForm.NextButtonClick(Sender: TObject);
   function CheckSelectDirPage: Boolean;
   var
     T: String;
-    FreeSpace, TotalSpace: Integer64;
+    FreeSpace, TotalSpace: Int64;
   begin
     Result := False;
 
@@ -2497,7 +2521,7 @@ procedure TWizardForm.NextButtonClick(Sender: TObject);
     if InstallMode = imNormal then begin
       { Check if there's enough free disk space }
       if GetSpaceOnNearestMountPoint(False, T, FreeSpace, TotalSpace) then begin
-        if Compare64(FreeSpace, MinimumSpace) < 0 then
+        if FreeSpace < MinimumSpace then
           { If not, show warning }
           if LoggedMsgBox(FmtSetupMessage(msgDiskSpaceWarning,
                [IntToKBStr(MinimumSpace), IntToKBStr(FreeSpace)]),
@@ -2529,7 +2553,7 @@ procedure TWizardForm.NextButtonClick(Sender: TObject);
   function CheckSelectComponentsPage: Boolean;
   var
     ComponentEntry: PSetupComponentEntry;
-    FreeSpace, TotalSpace: Integer64;
+    FreeSpace, TotalSpace: Int64;
     S: String;
     I: Integer;
   begin
@@ -2537,7 +2561,7 @@ procedure TWizardForm.NextButtonClick(Sender: TObject);
 
     if InstallMode = imNormal then begin
       if GetSpaceOnNearestMountPoint(False, DirEdit.Text, FreeSpace, TotalSpace) then begin
-        if Compare64(FreeSpace, CurrentComponentsSpace) < 0 then
+        if FreeSpace < CurrentComponentsSpace then
           if LoggedMsgBox(FmtSetupMessage(msgDiskSpaceWarning,
                [IntToKBStr(CurrentComponentsSpace), IntToKBStr(FreeSpace)]),
              SetupMessages[msgDiskSpaceWarningTitle],
@@ -2797,7 +2821,8 @@ const
   ColorChange: array[Boolean] of TColor = (clBtnFace, clWindow);
 begin
   GroupEdit.Enabled := not NoIconsCheck.Checked;
-  GroupEdit.Color := ColorChange[GroupEdit.Enabled];
+  if not GroupEdit.IsCustomStyleActive then
+    GroupEdit.Color := ColorChange[GroupEdit.Enabled];
   GroupBrowseButton.Enabled := not NoIconsCheck.Checked;
 end;
 

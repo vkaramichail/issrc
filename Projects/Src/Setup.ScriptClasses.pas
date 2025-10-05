@@ -20,7 +20,7 @@ procedure ScriptClassesLibraryUpdateVars(ScriptInterpreter: TIFPSExec);
 implementation
 
 uses
-  Windows, Controls, Forms, StdCtrls, Graphics,
+  Windows, Controls, Forms, StdCtrls, Graphics, Imaging.pngimage,
   uPSR_std, uPSR_classes, uPSR_graphics, uPSR_controls, uPSR_forms,
   uPSR_stdctrls, uPSR_extctrls, uPSR_comobj,
   NewStaticText, NewCheckListBox, NewProgressBar, RichEditViewer,
@@ -41,6 +41,18 @@ begin
   with Cl.FindClass(AnsiString(TWinControl.ClassName)) do
   begin
     RegisterPropertyHelper(@TWinControlParentBackground_R, @TWinControlParentBackground_W, 'ParentBackground');
+  end;
+end;
+
+procedure TPngImageCanvas_R(Self: TPngImage; var T: TCanvas); begin T := Self.Canvas; end;
+
+procedure RegisterPngImage_R(Cl: TPSRuntimeClassImporter);
+begin
+  with Cl.Add(TPngImage) do
+  begin
+    RegisterMethod(@TPngImage.LoadFromStream, 'LoadFromStream');
+    RegisterMethod(@TPngImage.SaveToStream, 'SaveToStream');
+    RegisterPropertyHelper(@TPngImageCanvas_R,nil,'Canvas');
   end;
 end;
 
@@ -138,18 +150,30 @@ end;
 procedure TBitmapAlphaFormat_W(Self: TBitmap; const T: TAlphaFormat); begin Self.AlphaFormat := T; end;
 procedure TBitmapAlphaFormat_R(Self: TBitmap; var T: TAlphaFormat); begin T := Self.AlphaFormat; end;
 
+procedure TBitmapButtonBitmap_W(Self: TBitmapButton; const T: TBitmap); begin Self.Bitmap := T; end;
+procedure TBitmapButtonBitmap_R(Self: TBitmapButton; var T: TBitmap); begin T := Self.Bitmap; end;
+
 procedure RegisterBitmapButton_R(Cl: TPSRuntimeClassImporter);
 begin
   with Cl.FindClass('TBitmap') do
   begin
     RegisterPropertyHelper(@TBitmapAlphaFormat_R, @TBitmapAlphaFormat_W, 'AlphaFormat');
   end;
-  Cl.Add(TBitmapButton);
+  with Cl.Add(TBitmapButton) do
+  begin
+    RegisterPropertyHelper(@TBitmapButtonBitmap_R, @TBitmapButtonBitmap_W, 'Bitmap');
+  end;
 end;
+
+procedure TBitmapImageBitmap_W(Self: TBitmapImage; const T: TBitmap); begin Self.Bitmap := T; end;
+procedure TBitmapImageBitmap_R(Self: TBitmapImage; var T: TBitmap); begin T := Self.Bitmap; end;
 
 procedure RegisterBitmapImage_R(Cl: TPSRuntimeClassImporter);
 begin
-  Cl.Add(TBitmapImage);
+  with Cl.Add(TBitmapImage) do
+  begin
+    RegisterPropertyHelper(@TBitmapImageBitmap_R, @TBitmapImageBitmap_W, 'Bitmap');
+  end;
 end;
 
 procedure RegisterBidiCtrls_R(Cl: TPSRuntimeClassImporter);
@@ -158,7 +182,10 @@ begin
   Cl.Add(TNewMemo);
   Cl.Add(TNewComboBox);
   Cl.Add(TNewListBox);
-  Cl.Add(TNewButton);
+  with Cl.Add(TNewButton) do
+  begin
+    RegisterMethod(@TNewButton.AdjustHeightIfCommandLink, 'AdjustHeightIfCommandLink');
+  end;
   Cl.Add(TNewCheckBox);
   Cl.Add(TNewRadioButton);
   with Cl.Add(TNewLinkLabel) do
@@ -427,6 +454,8 @@ begin
 
     { ComObj }
     RIRegister_ComObj(ScriptInterpreter);
+
+    RegisterPngImage_R(Cl);
 
     RegisterNewStaticText_R(Cl);
     RegisterNewCheckListBox_R(Cl);

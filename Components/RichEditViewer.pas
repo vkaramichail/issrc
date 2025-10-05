@@ -47,6 +47,8 @@ type
       FUseRichEdit: Boolean;
       FRichEditLoaded: Boolean;
       FCallback: IRichEditOleCallback;
+    class constructor Create;
+    class destructor Destroy;
     procedure SetRTFTextProp(const Value: AnsiString);
     procedure SetUseRichEdit(Value: Boolean);
     procedure UpdateBackgroundColor;
@@ -71,7 +73,7 @@ procedure Register;
 implementation
 
 uses
-  ShellApi, BidiUtils, PathFunc, ComObj;
+  ShellApi, PathFunc, ComObj, ComCtrls, Themes;
 
 const
   RICHEDIT_CLASSW = 'RichEdit20W';
@@ -228,11 +230,21 @@ end;
 
 { TRichEditViewer }
 
+class constructor TRichEditViewer.Create;
+begin
+  TCustomStyleEngine.RegisterStyleHook(TRichEditViewer, TRichEditStyleHook);
+end;
+
 constructor TRichEditViewer.Create(AOwner: TComponent);
 begin
   inherited;
   FUseRichEdit := True;
   FCallback := TBasicRichEditOleCallback.Create;
+end;
+
+class destructor TRichEditViewer.Destroy;
+begin
+  TCustomStyleEngine.UnregisterStyleHook(TRichEditViewer, TRichEditStyleHook);
 end;
 
 destructor TRichEditViewer.Destroy;
@@ -264,7 +276,6 @@ begin
       Must have a unique class name since it uses two different classes
       depending on the setting of the UseRichEdit property. }
     StrCat(Params.WinClassName, '/Text');  { don't localize! }
-  SetBiDiStyles(Self, Params);
 end;
 
 procedure TRichEditViewer.CreateWnd;
@@ -356,6 +367,22 @@ begin
     Result := StreamIn(SF_RTF);
     if Result <> 0 then
       Result := StreamIn(SF_TEXT);
+
+    var LStyle := StyleServices(Self);
+    if not LStyle.Enabled or LStyle.IsSystemStyle then
+      LStyle := nil;
+
+    if (LStyle <> nil) and (seFont in StyleElements) and (seClient in StyleElements) then begin
+      { Trigger TRichEditStyleHook.EMSetCharFormat, inspired by TSysRichEditStyleHook.UpdateColors.
+        It changes all colors to match the style. Not needed if FUseRichEdit is False. }
+      var cf: TCharFormat2;
+      ZeroMemory(@cf, sizeof(TCharFormat2));
+      cf.cbSize := sizeof(TCharFormat2);
+      cf.dwMask := CFM_COLOR;
+      SendMessage(Handle, EM_GETCHARFORMAT, SCF_DEFAULT, LParam(@cf));
+      cf.dwMask := CFM_COLOR;
+      SendMessage(Handle, EM_SETCHARFORMAT, SCF_DEFAULT, LParam(@cf));
+    end;
   end;
 end;
 

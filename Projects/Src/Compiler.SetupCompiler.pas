@@ -21,8 +21,9 @@ uses
   Windows, SysUtils, Classes, Generics.Collections,
   SimpleExpression, SHA256, ChaCha20, Shared.SetupTypes,
   Shared.Struct, Shared.CompilerInt.Struct, Shared.PreprocInt, Shared.SetupMessageIDs,
-  Shared.SetupSectionDirectives, Shared.VerInfoFunc, Shared.Int64Em, Shared.DebugStruct,
-  Compiler.ScriptCompiler, Compiler.StringLists, Compression.LZMACompressor;
+  Shared.SetupSectionDirectives, Shared.VerInfoFunc, Shared.DebugStruct,
+  Compiler.ScriptCompiler, Compiler.StringLists, Compression.LZMACompressor,
+  Compiler.ExeUpdateFunc;
 
 type
   EISCompileError = class(Exception);
@@ -62,8 +63,10 @@ type
 
   TCheckOrInstallKind = (cikCheck, cikDirectiveCheck, cikInstall);
 
-  TPrecompiledFile = (pfSetupE32, pfSetupLdrE32, pfIs7zDll, pfIsbunzipDll, pfIsunzlibDll, pfIslzmaExe);
+  TPrecompiledFile = (pfSetupE32, pfSetupCustomStyleE32, pfSetupLdrE32, pfIs7zDll, pfIsbunzipDll, pfIsunzlibDll, pfIslzmaExe);
   TPrecompiledFiles = set of TPrecompiledFile;
+
+  TWizardImages = TObjectList<TCustomMemoryStream>;
 
   TSetupCompiler = class
   private
@@ -134,8 +137,10 @@ type
     UseSetupLdr, DiskSpanning, TerminalServicesAware, DEPCompatible, ASLRCompatible: Boolean;
     DiskSliceSize: Int64;
     DiskClusterSize, SlicesPerDisk, ReserveBytes: Longint;
-    LicenseFile, InfoBeforeFile, InfoAfterFile, WizardImageFile: String;
-    WizardSmallImageFile: String;
+    LicenseFile, InfoBeforeFile, InfoAfterFile: String;
+    WizardImageFile, WizardSmallImageFile, WizardImageFileDynamicDark, WizardSmallImageFileDynamicDark: String;
+    WizardStyleFile, WizardStyleFileDynamicDark: String; { .vsf files }
+    WizardStyleSpecial: String; { 'polar' }
     DefaultDialogFontName: String;
 
     VersionInfoVersion, VersionInfoProductVersion: TFileVersionNumbers;
@@ -261,10 +266,11 @@ type
     procedure WriteDebugEntry(Kind: TDebugEntryKind; Index: Integer; StepOutMarker: Boolean = False);
     procedure WriteCompiledCodeText(const CompiledCodeText: Ansistring);
     procedure WriteCompiledCodeDebugInfo(const CompiledCodeDebugInfo: AnsiString);
-    function CreateMemoryStreamsFromFiles(const ADirectiveName, AFiles: String): TObjectList<TCustomMemoryStream>;
-    function CreateMemoryStreamsFromResources(const AResourceNamesPrefixes, AResourceNamesPostfixes: array of String): TObjectList<TCustomMemoryStream>;
+    function CreateWizardImagesFromFiles(const ADirectiveName, AFiles: String): TWizardImages;
+    function CreateWizardImagesFromResources(const AResourceNamesPrefixes, AResourceNamesPostfixes: array of String; const ADark: Boolean): TWizardImages;
     procedure VerificationError(const AError: TVerificationError;
       const AFilename: String; const ASigFilename: String = '');
+    procedure OnUpdateIconsAndStyle(const Operation: TUpdateIconsAndStyleOperation);
   public
     AppData: Longint;
     CallbackProc: TCompilerCallbackProc;
@@ -302,7 +308,7 @@ uses
   Commctrl, TypInfo, AnsiStrings, Math, WideStrUtils,
   PathFunc, TrustFunc, ISSigFunc, ECDSA, Shared.CommonFunc, Compiler.Messages, Shared.SetupEntFunc,
   Shared.FileClass, Shared.EncryptionFunc, Compression.Base, Compression.Zlib, Compression.bzlib,
-  Shared.LangOptionsSectionDirectives, Shared.ResUpdateFunc, Compiler.ExeUpdateFunc,
+  Shared.LangOptionsSectionDirectives,
 {$IFDEF STATICPREPROC}
   ISPP.Preprocess,
 {$ENDIF}
@@ -475,7 +481,7 @@ begin
   inherited Destroy;
 end;
 
-function TSetupCompiler.CreateMemoryStreamsFromFiles(const ADirectiveName, AFiles: String): TObjectList<TCustomMemoryStream>;
+function TSetupCompiler.CreateWizardImagesFromFiles(const ADirectiveName, AFiles: String): TWizardImages;
 
   procedure AddFile(const Filename: String);
   begin
@@ -490,7 +496,7 @@ var
   H: THandle;
   FindData: TWin32FindData;
 begin
-  Result := TObjectList<TCustomMemoryStream>.Create;
+  Result := TWizardImages.Create;
   try
     { In older versions only one file could be listed and comma's could be used so
       before treating AFiles as a list, first check if it's actually a single file
@@ -532,15 +538,18 @@ begin
   end;
 end;
 
-function TSetupCompiler.CreateMemoryStreamsFromResources(const AResourceNamesPrefixes, AResourceNamesPostfixes: array of String): TObjectList<TCustomMemoryStream>;
+function TSetupCompiler.CreateWizardImagesFromResources(const AResourceNamesPrefixes, AResourceNamesPostfixes: array of String; const ADark: Boolean): TWizardImages;
 var
   I, J: Integer;
 begin
-  Result := TObjectList<TCustomMemoryStream>.Create;
+  var ADarkPostfix := '';
+  if ADark then
+   ADarkPostfix := '_Dark';
+  Result := TWizardImages.Create;
   try
     for I := 0 to Length(AResourceNamesPrefixes)-1 do
       for J := 0 to Length(AResourceNamesPostfixes)-1 do
-        Result.Add(TResourceStream.Create(HInstance, AResourceNamesPrefixes[I]+AResourceNamesPostfixes[J], RT_RCDATA));
+        Result.Add(TResourceStream.Create(HInstance, AResourceNamesPrefixes[I]+AResourceNamesPostfixes[J]+ADarkPostfix, RT_RCDATA));
   except
     Result.Free;
     raise;
@@ -1932,6 +1941,62 @@ begin
   end;
 end;
 
+function StrToInteger64(const S: String; var X: Int64): Boolean;
+{ Converts a string containing an unsigned decimal number, or hexadecimal
+  number prefixed with '$', into an Integer64. Returns True if successful,
+  or False if invalid characters were encountered or an overflow occurred.
+  Supports digits separators. }
+var
+  Len, Base, StartIndex, I: Integer;
+  V: Int64;
+  C: Char;
+begin
+  Result := False;
+
+  Len := Length(S);
+  Base := 10;
+  StartIndex := 1;
+  if Len > 0 then begin
+    if S[1] = '$' then begin
+      Base := 16;
+      Inc(StartIndex);
+    end else if S[1] = '_' then
+      Exit;
+  end;
+
+  if (StartIndex > Len) or (S[StartIndex] = '_') then
+    Exit;
+  V := 0;
+
+  try
+    for I := StartIndex to Len do begin
+      C := UpCase(S[I]);
+      case C of
+        '0'..'9':
+          begin
+            V := V * Base;
+            Inc(V, Ord(C) - Ord('0'));
+          end;
+        'A'..'F':
+          begin
+            if Base <> 16 then
+              Exit;
+            V := V * Base;
+            Inc(V, Ord(C) - (Ord('A') - 10));
+          end;
+        '_':
+          { Ignore }
+      else
+        Exit;
+      end;
+    end;
+    X := V;
+    Result := True;
+  except on E: EOverflow do
+    ;
+  end;
+end;
+
 function TSetupCompiler.EvalArchitectureIdentifier(Sender: TSimpleExpression;
   const Name: String; const Parameters: array of const): Boolean;
 const
@@ -2475,7 +2540,8 @@ var
 
   function StrToPrecompiledFiles(S: String): TPrecompiledFiles;
   const
-    PrecompiledFiles: array of PChar = ['setupe32', 'setupldre32', 'is7zdll', 'isbunzipdll', 'isunzlibdll', 'islzmaexe'];
+    PrecompiledFiles: array of PChar = ['setupe32', 'setupcustomstylee23', 'setupldre32', 'is7zdll',
+      'isbunzipdll', 'isunzlibdll', 'islzmaexe'];
   begin
     Result := [];
     while True do
@@ -2483,11 +2549,12 @@ var
         -2: Break;
         -1: Invalid;
         0: Include(Result, pfSetupE32);
-        1: Include(Result, pfSetupLdrE32);
-        2: Include(Result, pfIs7zDll);
-        3: Include(Result, pfIsbunzipDll);
-        4: Include(Result, pfIsunzlibDll);
-        5: Include(Result, pfIslzmaExe);
+        1: Include(Result, pfSetupCustomStyleE32);
+        2: Include(Result, pfSetupLdrE32);
+        3: Include(Result, pfIs7zDll);
+        4: Include(Result, pfIsbunzipDll);
+        5: Include(Result, pfIsunzlibDll);
+        6: Include(Result, pfIslzmaExe);
       end;
   end;
 
@@ -2506,6 +2573,41 @@ var
     end;
     if (X < Min) or (X > Max) or (Y < Min) or (Y > Max) then
       Invalid;
+  end;
+
+  procedure HandleWizardStyle(WizardStyle: String);
+  const
+    Styles: array of PChar = [
+      'classic', 'modern',
+      'light', 'dark', 'dynamic',
+      'includetitlebar',
+      'polar', 'slate', 'zircon'];
+    StylesGroups: array of Integer = [0, 0, 1, 1, 1, 2, 3, 3, 3];
+  var
+    StylesGroupSeen: array [0..3] of Boolean;
+  begin
+    for var I := Low(StylesGroupSeen) to High(StylesGroupSeen) do
+      StylesGroupSeen[I] := False;
+    while True do begin
+      const R = ExtractFlag(WizardStyle, Styles);
+      case R of
+        -2: Break;
+        -1: Invalid;
+      end;
+      const StyleGroup = StylesGroups[R];
+      if StylesGroupSeen[StyleGroup] then
+        Invalid;
+      StylesGroupSeen[StyleGroup] := True;
+      case R of
+        0: Exclude(SetupHeader.Options, shWizardModern);
+        1: Include(SetupHeader.Options, shWizardModern);
+        2: SetupHeader.WizardDarkStyle := wdsLight;
+        3: SetupHeader.WizardDarkStyle := wdsDark;
+        4: SetupHeader.WizardDarkStyle := wdsDynamic;
+        5: Include(SetupHeader.Options, shWizardBorderStyled);
+        6..8: WizardStyleSpecial := Styles[R];
+      end;
+    end;
   end;
 
 var
@@ -3218,8 +3320,33 @@ begin
         else
           Invalid;
     end;
-    ssWizardImageBackColor, ssWizardSmallImageBackColor: begin
-        WarningsList.Add(Format(SCompilerEntryObsolete, ['Setup', KeyName]));
+    ssWizardImageBackColor: begin
+        try
+          SetupHeader.WizardImageBackColor := StringToColor(Value);
+        except
+          Invalid;
+        end;
+      end;
+    ssWizardImageBackColorDynamicDark: begin
+        try
+          SetupHeader.WizardImageBackColorDynamicDark := StringToColor(Value);
+        except
+          Invalid;
+        end;
+      end;
+    ssWizardSmallImageBackColor: begin
+        try
+          SetupHeader.WizardSmallImageBackColor := StringToColor(Value);
+        except
+          Invalid;
+        end;
+      end;
+    ssWizardSmallImageBackColorDynamicDark: begin
+        try
+          SetupHeader.WizardSmallImageBackColorDynamicDark := StringToColor(Value);
+        except
+          Invalid;
+        end;
       end;
     ssWizardImageStretch: begin
         SetSetupHeaderOption(shWizardImageStretch);
@@ -3227,23 +3354,30 @@ begin
     ssWizardImageFile: begin
         WizardImageFile := Value;
       end;
+    ssWizardImageFileDynamicDark: begin
+        WizardImageFileDynamicDark := Value;
+      end;
     ssWizardResizable: begin
         SetSetupHeaderOption(shWizardResizable);
       end;
     ssWizardSmallImageFile: begin
         WizardSmallImageFile := Value;
       end;
+    ssWizardSmallImageFileDynamicDark: begin
+        WizardSmallImageFileDynamicDark := Value;
+      end;
     ssWizardSizePercent: begin
         StrToPercentages(Value, SetupHeader.WizardSizePercentX,
           SetupHeader.WizardSizePercentY, 100, 150)
       end;
     ssWizardStyle: begin
-        if CompareText(Value, 'classic') = 0 then
-          SetupHeader.WizardStyle := wsClassic
-        else if CompareText(Value, 'modern') = 0 then
-          SetupHeader.WizardStyle := wsModern
-        else
-          Invalid;
+        HandleWizardStyle(Value);
+      end;
+    ssWizardStyleFile: begin
+        WizardStyleFile := Value;
+      end;
+    ssWizardStyleFileDynamicDark: begin
+        WizardStyleFileDynamicDark := Value;
       end;
   end;
 end;
@@ -3421,7 +3555,10 @@ procedure TSetupCompiler.EnumLangOptionsProc(const Line: PChar; const Ext: Integ
       lsLanguageID: begin
           if AffectsMultipleLangs then
             AbortCompileFmt(SCompilerCantSpecifyLangOption, [KeyName]);
-          LangOptions.LanguageID := StrToIntCheck(Value);
+          const LanguageID = StrToIntCheck(Value);
+          if (LanguageID < Low(LangOptions.LanguageID)) or (LanguageID > High(LangOptions.LanguageID)) then
+            Invalid;
+          LangOptions.LanguageID := Word(LanguageID);
         end;
       lsLanguageName: begin
           if AffectsMultipleLangs then
@@ -4785,7 +4922,7 @@ type
   PFileListRec = ^TFileListRec;
   TFileListRec = record
     Name: String;
-    Size: Integer64;
+    Size: Int64;
   end;
   PDirListRec = ^TDirListRec;
   TDirListRec = record
@@ -4842,15 +4979,14 @@ type
   end;
 
   procedure AddToFileList(const FileList: TList; const Filename: String;
-    const SizeLo, SizeHi: LongWord);
+    const Size: Int64);
   var
     Rec: PFileListRec;
   begin
     FileList.Expand;
     New(Rec);
     Rec.Name := Filename;
-    Rec.Size.Lo := SizeLo;
-    Rec.Size.Hi := SizeHi;
+    Rec.Size := Size;
     FileList.Add(Rec);
   end;
 
@@ -4896,8 +5032,7 @@ type
           if IsExcluded(SearchSubDir + FileName, AExcludes) then
             Continue;
 
-          AddToFileList(FileList, SearchSubDir + FileName, FindData.nFileSizeLow,
-            FindData.nFileSizeHigh);
+          AddToFileList(FileList, SearchSubDir + FileName, FindDataFileSizeToInt64(FindData));
 
           CallIdleProc;
         until not SourceIsWildcard or not FindNextFile(H, FindData);
@@ -5600,7 +5735,7 @@ begin
           if FileList.Count > 1 then
             SortFileList(FileList, 0, FileList.Count-1, SortFilesByExtension, SortFilesByName);
         end else
-          AddToFileList(FileList, SourceWildcard, 0, 0);
+          AddToFileList(FileList, SourceWildcard, 0);
 
         if FileList.Count > 0 then begin
           if not ExternalFile then
@@ -6718,6 +6853,18 @@ begin
     [AFilename, Format(Messages[AError], [PathExtractName(ASigFilename)])]); { Not all messages actually have a %s parameter but that's OK }
 end;
 
+procedure TSetupCompiler.OnUpdateIconsAndStyle(const Operation: TUpdateIconsAndStyleOperation);
+begin
+  case Operation of
+    uisoIcoFileName: LineNumber := SetupDirectiveLines[ssSetupIconFile];
+    uisoWizardDarkStyle: LineNumber := SetupDirectiveLines[ssWizardStyle];
+    uisoStyleFileName: LineNumber := SetupDirectiveLines[ssWizardStyleFile];
+    uisoStyleFileNameDynamicDark: LineNumber := SetupDirectiveLines[ssWizardStyleFileDynamicDark];
+  else
+    LineNumber := 0;
+  end;
+end;
+
 procedure TSetupCompiler.Compile;
 
   procedure InitDebugInfo;
@@ -6860,7 +7007,8 @@ var
   SetupFile: TFile;
   ExeFile: TFile;
   LicenseText, InfoBeforeText, InfoAfterText: AnsiString;
-  WizardImages, WizardSmallImages: TObjectList<TCustomMemoryStream>;
+  WizardImages, WizardSmallImages: TWizardImages;
+  WizardImagesDynamicDark, WizardSmallImagesDynamicDark: TWizardImages;
   DecompressorDLL, SevenZipDLL: TMemoryStream;
 
   SizeOfExe, SizeOfHeaders: Int64;
@@ -6874,6 +7022,18 @@ var
       Size := Stream.Size;
       W.Write(Size, SizeOf(Size));
       W.Write(Stream.Memory^, Size);
+    end;
+
+    procedure WriteWizardImages(const WizardImages: TWizardImages; const W: TCompressedBlockWriter);
+    begin
+      if WizardImages <> nil then begin
+        W.Write(WizardImages.Count, SizeOf(Integer));
+        for var I := 0 to WizardImages.Count-1 do
+          WriteStream(WizardImages[I], W);
+      end else begin
+        const Count: Integer = 0;
+        W.Write(Count, SizeOf(Integer));
+      end;
     end;
 
   var
@@ -6968,12 +7128,10 @@ var
         SECompressedBlockWrite(W, UninstallRunEntries[J]^, SizeOf(TSetupRunEntry),
           SetupRunEntryStrings, SetupRunEntryAnsiStrings);
 
-      W.Write(WizardImages.Count, SizeOf(Integer));
-      for J := 0 to WizardImages.Count-1 do
-        WriteStream(WizardImages[J], W);
-      W.Write(WizardSmallImages.Count, SizeOf(Integer));
-      for J := 0 to WizardSmallImages.Count-1 do
-        WriteStream(WizardSmallImages[J], W);
+      WriteWizardImages(WizardImages, W);
+      WriteWizardImages(WizardSmallImages, W);
+      WriteWizardImages(WizardImagesDynamicDark, W);
+      WriteWizardImages(WizardSmallImagesDynamicDark, W);
       if SetupHeader.CompressMethod in [cmZip, cmBzip] then
         WriteStream(DecompressorDLL, W);
       if SetupHeader.SevenZipLibraryName <> '' then
@@ -7288,8 +7446,11 @@ var
             FileTimeToLocalFileTime(FT, FL.SourceTimeStamp);
           if floApplyTouchDateTime in FLExtraInfo.Flags then
             ApplyTouchDateTime(FL.SourceTimeStamp);
-          if TimeStampRounding > 0 then
-            Dec64(Integer64(FL.SourceTimeStamp), Mod64(Integer64(FL.SourceTimeStamp), TimeStampRounding * 10000000));
+          if TimeStampRounding > 0 then begin
+            var SourceTimeStamp := Int64(FL.SourceTimeStamp);
+            Dec(SourceTimeStamp, SourceTimeStamp mod (TimeStampRounding * 10000000));
+            FL.SourceTimeStamp := TFileTime(SourceTimeStamp);
+          end;
 
           if ChunkCompressed and IsX86OrX64Executable(SourceFile) then
             Include(FL.Flags, floCallInstructionOptimized);
@@ -7474,26 +7635,45 @@ var
 
   procedure PrepareSetupE32(var M: TMemoryFile);
   var
-    TempFilename, E32Filename, ConvertFilename: String;
+    TempFilename, E32Basename, E32Filename, ConvertFilename: String;
+    E32Pf: TPrecompiledFile;
+    E32Uisf: TUpdateIconsAndStyleFile;
     ConvertFile: TFile;
   begin
+    if (SetupHeader.WizardDarkStyle <> wdsDynamic) and (WizardStyleFileDynamicDark <> '') then
+      AbortCompileFmt(SCompilerCompressInternalError, ['Unexpected WizardStyleFileDynamicDark value']);
+  
     TempFilename := '';
     try
-      E32Filename := CompilerDir + 'Setup.e32';
+      if (SetupHeader.WizardDarkStyle = wdsLight) and (WizardStyleFile = '') then begin
+        E32Basename := 'Setup.e32';
+        E32Pf := pfSetupE32;
+        E32Uisf := uisfSetupE32;
+      end else begin
+        E32Basename := 'SetupCustomStyle.e32';
+        E32Pf := pfSetupCustomStyleE32;
+        E32Uisf := uisfSetupCustomStyleE32;
+      end;
+      E32Filename := CompilerDir + E32Basename;
       { make a copy and update icons, version info and if needed manifest }
       ConvertFilename := OutputDir + OutputBaseFilename + '.e32.tmp';
-      CopyFileOrAbort(E32Filename, ConvertFilename, not(pfSetupE32 in DisablePrecompiledFileVerifications),
+      CopyFileOrAbort(E32Filename, ConvertFilename, not(E32Pf in DisablePrecompiledFileVerifications),
         [cftoTrustAllOnDebug], OnCheckedTrust);
       SetFileAttributes(PChar(ConvertFilename), FILE_ATTRIBUTE_ARCHIVE);
       TempFilename := ConvertFilename;
-      if SetupIconFilename <> '' then begin
-        AddStatus(Format(SCompilerStatusUpdatingIcons, ['Setup.e32']));
-        LineNumber := SetupDirectiveLines[ssSetupIconFile];
-        { This also deletes the UninstallImage resource. Removing it makes UninstallProgressForm use the custom icon instead. }
-        UpdateIcons(ConvertFileName, PrependSourceDirName(SetupIconFilename), True);
-        LineNumber := 0;
-      end;
-      AddStatus(Format(SCompilerStatusUpdatingVersionInfo, ['Setup.e32']));
+      if E32Uisf = uisfSetupCustomStyleE32 then
+        AddStatus(Format(SCompilerStatusUpdatingIconsAndVsf, [E32Basename]))
+      else
+        AddStatus(Format(SCompilerStatusUpdatingIcons, [E32Basename]));
+      { OnUpdateIconsAndStyle will set proper LineNumber }
+      if SetupIconFilename <> '' then
+        UpdateIconsAndStyle(ConvertFileName, E32Uisf, PrependSourceDirName(SetupIconFilename), SetupHeader.WizardDarkStyle,
+          WizardStyleFile, WizardStyleFileDynamicDark, OnUpdateIconsAndStyle)
+      else
+        UpdateIconsAndStyle(ConvertFileName, E32Uisf, '', SetupHeader.WizardDarkStyle,
+          WizardStyleFile, WizardStyleFileDynamicDark, OnUpdateIconsAndStyle);
+      LineNumber := 0;
+      AddStatus(Format(SCompilerStatusUpdatingVersionInfo, [E32Basename]));
       ConvertFile := TFile.Create(ConvertFilename, fdOpenExisting, faReadWrite, fsNone);
       try
         UpdateVersionInfo(ConvertFile, TFileVersionNumbers(nil^), VersionInfoProductVersion, VersionInfoCompany,
@@ -7668,6 +7848,8 @@ begin
 
   WizardImages := nil;
   WizardSmallImages := nil;
+  WizardImagesDynamicDark := nil;
+  WizardSmallImagesDynamicDark := nil;
   SetupE32 := nil;
   DecompressorDLL := nil;
   SevenZipDLL := nil;
@@ -7743,7 +7925,7 @@ begin
     MissingMessagesWarning := True;
     NotRecognizedMessagesWarning := True;
     UsedUserAreasWarning := True;
-    SetupHeader.WizardStyle := wsClassic;
+    SetupHeader.WizardDarkStyle := wdsLight;
 
     { Read [Setup] section }
     EnumIniSection(EnumSetupProc, 'Setup', 0, True, True, '', False, False);
@@ -7924,14 +8106,23 @@ begin
     if shAlwaysUsePersonalGroup in SetupHeader.Options then
       UsedUserAreas.Add('AlwaysUsePersonalGroup');
     if SetupDirectiveLines[ssWizardSizePercent] = 0 then begin
-      if SetupHeader.WizardStyle = wsModern then
+      if shWizardModern in SetupHeader.Options then
         SetupHeader.WizardSizePercentX := 120
       else
         SetupHeader.WizardSizePercentX := 100;
       SetupHeader.WizardSizePercentY := SetupHeader.WizardSizePercentX;
     end;
-    if (SetupDirectiveLines[ssWizardResizable] = 0) and (SetupHeader.WizardStyle = wsModern) then
+    if (SetupDirectiveLines[ssWizardResizable] = 0) and (shWizardModern in SetupHeader.Options) then
       Include(SetupHeader.Options, shWizardResizable);
+    if WizardStyleSpecial <> '' then begin
+      const BuiltinStyleFile = 'builtin:' + WizardStyleSpecial;
+      if WizardStyleFile = '' then
+          WizardStyleFile := BuiltinStyleFile;
+      if WizardStyleFileDynamicDark = '' then
+        WizardStyleFileDynamicDark := BuiltinStyleFile; { Might be cleared again below }
+    end;
+    if (WizardStyleFileDynamicDark <> '') and (SetupHeader.WizardDarkStyle <> wdsDynamic) then
+      WizardStyleFileDynamicDark := ''; { Avoid unnecessary size increase - also checked for by PrepareSetupE32 }
     if (SetupHeader.MinVersion.NTVersion shr 16 = $0601) and (SetupHeader.MinVersion.NTServicePack < $100) then
       WarningsList.Add(Format(SCompilerMinVersionRecommendation, ['6.1', '6.1sp1']));
 
@@ -7961,8 +8152,8 @@ begin
     end;
 
     if Password <> '' then begin
-      GenerateRandomBytes(SetupEncryptionHeader.KDFSalt, SizeOf(SetupEncryptionHeader.KDFSalt));
-      GenerateRandomBytes(SetupEncryptionHeader.BaseNonce, SizeOf(SetupEncryptionHeader.BaseNonce));
+      TStrongRandom.GenerateBytes(SetupEncryptionHeader.KDFSalt, SizeOf(SetupEncryptionHeader.KDFSalt));
+      TStrongRandom.GenerateBytes(SetupEncryptionHeader.BaseNonce, SizeOf(SetupEncryptionHeader.BaseNonce));
       GenerateEncryptionKey(Password,  SetupEncryptionHeader.KDFSalt, SetupEncryptionHeader.KDFIterations, CryptKey);
       GeneratePasswordTest(CryptKey, SetupEncryptionHeader.BaseNonce, SetupEncryptionHeader.PasswordTest);
       Include(SetupHeader.Options, shPassword);
@@ -7987,7 +8178,8 @@ begin
     LineNumber := 0;
     CallIdleProc;
 
-    { Read wizard image }
+    { Read main wizard images }
+    const IsForcedDark = SetupHeader.WizardDarkStyle = wdsDark;
     LineNumber := SetupDirectiveLines[ssWizardImageFile];
     AddStatus(Format(SCompilerStatusReadingFile, ['WizardImageFile']));
     if WizardImageFile <> '' then begin
@@ -7995,9 +8187,20 @@ begin
         WarningsList.Add(Format(SCompilerWizImageRenamed, [WizardImageFile, 'compiler:WizClassicImage.bmp']));
         WizardImageFile := 'compiler:WizClassicImage.bmp';
       end;
-      WizardImages := CreateMemoryStreamsFromFiles('WizardImageFile', WizardImageFile)
-    end else
-      WizardImages := CreateMemoryStreamsFromResources(['WizardImage'], ['150']);
+      WizardImages := CreateWizardImagesFromFiles('WizardImageFile', WizardImageFile);
+      if SetupDirectiveLines[ssWizardImageBackColor] = 0 then
+        SetupHeader.WizardImageBackColor := clWindow;
+    end else begin
+      WizardImages := CreateWizardImagesFromResources(['WizardImage'], ['150'], IsForcedDark);
+      if SetupDirectiveLines[ssWizardImageBackColor] = 0 then begin
+        if WizardStyleSpecial = 'slate' then
+          SetupHeader.WizardImageBackColor := $d4c9b8
+        else if WizardStyleSpecial = 'zircon' then
+          SetupHeader.WizardImageBackColor := $ebe5c6
+        else
+          SetupHeader.WizardImageBackColor := IfThen(IsForcedDark, $534831, $f9f3e8); { Also see below }
+      end;
+    end;
     LineNumber := SetupDirectiveLines[ssWizardSmallImageFile];
     AddStatus(Format(SCompilerStatusReadingFile, ['WizardSmallImageFile']));
     if WizardSmallImageFile <> '' then begin
@@ -8005,10 +8208,42 @@ begin
         WarningsList.Add(Format(SCompilerWizImageRenamed, [WizardSmallImageFile, 'compiler:WizClassicSmallImage.bmp']));
         WizardSmallImageFile := 'compiler:WizClassicSmallImage.bmp';
       end;
-      WizardSmallImages := CreateMemoryStreamsFromFiles('WizardSmallImage', WizardSmallImageFile)
-    end else
-      WizardSmallImages := CreateMemoryStreamsFromResources(['WizardSmallImage'], ['250']);
+      WizardSmallImages := CreateWizardImagesFromFiles('WizardSmallImage', WizardSmallImageFile);
+      if SetupDirectiveLines[ssWizardSmallImageBackColor] = 0 then
+        SetupHeader.WizardSmallImageBackColor := clWindow;
+    end else begin
+      WizardSmallImages := CreateWizardImagesFromResources(['WizardSmallImage'], ['250'], IsForcedDark);
+      if SetupDirectiveLines[ssWizardSmallImageBackColor] = 0 then
+        SetupHeader.WizardSmallImageBackColor := clNone;
+    end;
     LineNumber := 0;
+
+    { Read dark dynamic wizard images }
+    if SetupHeader.WizardDarkStyle = wdsDynamic then begin
+      LineNumber := SetupDirectiveLines[ssWizardImageFileDynamicDark];
+      AddStatus(Format(SCompilerStatusReadingFile, ['WizardImageFileDynamicDark']));
+      if WizardImageFileDynamicDark <> '' then begin
+        WizardImagesDynamicDark := CreateWizardImagesFromFiles('WizardImageFileDynamicDark', WizardImageFileDynamicDark);
+        if SetupDirectiveLines[ssWizardImageBackColorDynamicDark] = 0 then
+          SetupHeader.WizardImageBackColorDynamicDark := clWindow;
+      end else begin
+        WizardImagesDynamicDark := CreateWizardImagesFromResources(['WizardImage'], ['150'], True);
+        if SetupDirectiveLines[ssWizardImageBackColorDynamicDark] = 0 then
+          SetupHeader.WizardImageBackColorDynamicDark := $534831; { See above }
+      end;
+      LineNumber := SetupDirectiveLines[ssWizardSmallImageFileDynamicDark];
+      AddStatus(Format(SCompilerStatusReadingFile, ['WizardSmallImageFileDynamicDark']));
+      if WizardSmallImageFileDynamicDark <> '' then begin
+        WizardSmallImagesDynamicDark := CreateWizardImagesFromFiles('WizardSmallImageDynamicDark', WizardSmallImageFileDynamicDark);
+        if SetupDirectiveLines[ssWizardSmallImageBackColorDynamicDark] = 0 then
+          SetupHeader.WizardSmallImageBackColorDynamicDark := clWindow;
+      end else begin
+        WizardSmallImagesDynamicDark := CreateWizardImagesFromResources(['WizardSmallImage'], ['250'], True);
+        if SetupDirectiveLines[ssWizardSmallImageBackColorDynamicDark] = 0 then
+          SetupHeader.WizardSmallImageBackColorDynamicDark := clNone;
+      end;
+      LineNumber := 0;
+    end;
 
     { Prepare Setup executable & signed uninstaller data }
     if Output then begin
@@ -8270,11 +8505,13 @@ begin
             [cftoTrustAllOnDebug], OnCheckedTrust);
           { if there was a read-only attribute, remove it }
           SetFileAttributes(PChar(ExeFilename), FILE_ATTRIBUTE_ARCHIVE);
-          if SetupIconFilename <> '' then begin
-            { update icons }
+          if (SetupIconFilename <> '') or (SetupHeader.WizardDarkStyle <> wdsDynamic) then begin
             AddStatus(Format(SCompilerStatusUpdatingIcons, ['Setup.exe']));
-            LineNumber := SetupDirectiveLines[ssSetupIconFile];
-            UpdateIcons(ExeFilename, PrependSourceDirName(SetupIconFilename), False);
+            { OnUpdateIconsAndStyle will set proper LineNumber }
+            if SetupIconFilename <> '' then
+              UpdateIconsAndStyle(ExeFilename, uisfSetupLdrE32, PrependSourceDirName(SetupIconFilename), SetupHeader.WizardDarkStyle, '', '', OnUpdateIconsAndStyle)
+            else
+              UpdateIconsAndStyle(ExeFilename, uisfSetupLdrE32, '', SetupHeader.WizardDarkStyle, '', '', OnUpdateIconsAndStyle);
             LineNumber := 0;
           end;
           SetupFile := TFile.Create(ExeFilename, fdOpenExisting, faReadWrite, fsNone);
@@ -8394,6 +8631,8 @@ begin
     SevenZipDLL.Free;
     DecompressorDLL.Free;
     SetupE32.Free;
+    WizardSmallImagesDynamicDark.Free;
+    WizardImagesDynamicDark.Free;
     WizardSmallImages.Free;
     WizardImages.Free;
     ClearSEList(LanguageEntries, SetupLanguageEntryStrings, SetupLanguageEntryAnsiStrings);

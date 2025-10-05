@@ -65,7 +65,6 @@ const
   clNone = TColor($1FFFFFFF);
   clDefault = TColor($20000000);
 
-function IdentToColor(const Ident: string; var Color: Longint): Boolean;
 function StringToColor(const S: string): TColor;
 function IsRelativePath(const Filename: String): Boolean;
 function CreateMemoryStreamFromFile(const Filename: String; const CheckTrust: Boolean = False;
@@ -78,12 +77,11 @@ function IsValidIdentString(const S: String; AllowBackslash, AllowOperators: Boo
 procedure SkipWhitespace(var S: PChar);
 function ExtractWords(var S: PChar; const Sep: Char): String;
 function UnescapeBraces(const S: String): String;
-procedure GenerateRandomBytes(var Buffer; Bytes: Cardinal);
 
 implementation
 
 uses
-  TrustFunc, Shared.CommonFunc, Shared.Int64Em,
+  TrustFunc, Shared.CommonFunc,
   Compression.Base, Compiler.Messages;
 
 type
@@ -137,24 +135,27 @@ const
     (Value: clInfoBk; Name: 'clInfoBk'),
     (Value: clNone; Name: 'clNone'));
 
-function IdentToColor(const Ident: string; var Color: Longint): Boolean;
-var
-  I: Integer;
-begin
-  for I := Low(Colors) to High(Colors) do
-    if CompareText(Colors[I].Name, Ident) = 0 then
-    begin
-      Result := True;
-      Color := Longint(Colors[I].Value);
-      Exit;
-    end;
-  Result := False;
-end;
-
 function StringToColor(const S: string): TColor;
+
+  function IdentToColor(const Ident: string; var Color: LongInt): Boolean;
+  begin
+    for var I := Low(Colors) to High(Colors) do
+      if CompareText(Colors[I].Name, Ident) = 0 then
+      begin
+        Result := True;
+        Color := LongInt(Colors[I].Value);
+        Exit;
+      end;
+    Result := False;
+  end;
+
 begin
-  if not IdentToColor(S, Longint(Result)) then
-    Result := TColor(StrToInt(S));
+  if not IdentToColor(S, Longint(Result)) then begin
+    var Hex := S;
+    if (Length(Hex) = 7) and (Hex[1] = '#') then
+      Hex := '$' + Copy(Hex, 6, 2)  + Copy(Hex, 4, 2) + Copy(Hex, 2, 2);
+    Result := TColor(StrToInt(Hex));
+  end;
 end;
 
 function IsRelativePath(const Filename: String): Boolean;
@@ -213,15 +214,13 @@ function FileSizeAndCRCIs(const Filename: String; const Size: Cardinal;
   const CRC: Longint): Boolean;
 var
   F: TFile;
-  SizeOfFile: Integer64;
   Buf: AnsiString;
 begin
   Result := False;
   try
     F := TFile.Create(Filename, fdOpenExisting, faRead, fsRead);
     try
-      SizeOfFile := F.Size;
-      if (SizeOfFile.Lo = Size) and (SizeOfFile.Hi = 0) then begin
+      if F.Size = Size then begin
         SetLength(Buf, Size);
         F.ReadBuffer(Buf[1], Size);
         if GetCRC32(Buf[1], Size) = CRC then
@@ -351,49 +350,4 @@ begin
   end;
 end;
 
-type
-  HCRYPTPROV = DWORD;
-
-const
-  PROV_RSA_FULL = 1;
-  CRYPT_VERIFYCONTEXT = $F0000000;
-
-function CryptAcquireContext(var phProv: HCRYPTPROV; pszContainer: PAnsiChar;
-  pszProvider: PAnsiChar; dwProvType: DWORD; dwFlags: DWORD): BOOL;
-  stdcall; external advapi32 name 'CryptAcquireContextA';
-function CryptReleaseContext(hProv: HCRYPTPROV; dwFlags: DWORD): BOOL;
-  stdcall; external advapi32 name 'CryptReleaseContext';
-function CryptGenRandom(hProv: HCRYPTPROV; dwLen: DWORD; pbBuffer: Pointer): BOOL;
-  stdcall; external advapi32 name 'CryptGenRandom';
-
-var
-  CryptProv: HCRYPTPROV;
-
-procedure GenerateRandomBytes(var Buffer; Bytes: Cardinal);
-var
-  ErrorCode: DWORD;
-begin
-  if CryptProv = 0 then begin
-    if not CryptAcquireContext(CryptProv, nil, nil, PROV_RSA_FULL,
-       CRYPT_VERIFYCONTEXT) then begin
-      ErrorCode := GetLastError;
-      raise Exception.CreateFmt(SCompilerFunctionFailedWithCode,
-        ['CryptAcquireContext', ErrorCode, Win32ErrorString(ErrorCode)]);
-    end;
-    { Note: CryptProv is released in the 'finalization' section of this unit }
-  end;
-  FillChar(Buffer, Bytes, 0);
-  if not CryptGenRandom(CryptProv, Bytes, @Buffer) then begin
-    ErrorCode := GetLastError;
-    raise Exception.CreateFmt(SCompilerFunctionFailedWithCode,
-      ['CryptGenRandom', ErrorCode, Win32ErrorString(ErrorCode)]);
-  end;
-end;
-
-initialization
-finalization
-  if CryptProv <> 0 then begin
-    CryptReleaseContext(CryptProv, 0);
-    CryptProv := 0;
-  end;
 end.

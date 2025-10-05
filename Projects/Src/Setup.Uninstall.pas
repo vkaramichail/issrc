@@ -17,7 +17,7 @@ procedure HandleUninstallerEndSession;
 implementation
 
 uses
-  Windows, SysUtils, Messages, Forms, PathFunc, Shared.CommonFunc.Vcl,
+  Windows, SysUtils, Messages, Forms, Themes, PathFunc, Shared.CommonFunc.Vcl,
   Shared.CommonFunc, Setup.UninstallLog, SetupLdrAndSetup.Messages,
   Shared.SetupMessageIDs, SetupLdrAndSetup.InstFunc, Setup.InstFunc, Shared.Struct,
   Shared.SetupEntFunc, Setup.UninstallProgressForm, Setup.UninstallSharedFileForm,
@@ -52,19 +52,18 @@ var
   OldWindowProc: Pointer;
 
 procedure ShowExceptionMsg;
-var
-  Msg: String;
 begin
+  { Also see ShowExceptionMsg in Setup.inc }
   if ExceptObject is EAbort then
     Exit;
-  Msg := GetExceptMessage;
+  const Msg = GetExceptMessage;
   Log('Exception message:');
-  LoggedAppMessageBox(PChar(Msg), Pointer(SetupMessages[msgErrorTitle]),
+  LoggedMsgBox(PChar(Msg), Pointer(SetupMessages[msgErrorTitle]),
     MB_OK or MB_ICONSTOP, True, IDOK);
     { ^ use a Pointer cast instead of a PChar cast so that it will use "nil"
       if SetupMessages[msgErrorTitle] is empty due to the messages not being
-      loaded yet. MessageBox displays 'Error' as the caption if the lpCaption
-      parameter is nil. }
+      loaded yet. LoggedMsgBox displays 'Error' as the caption if the lpCaption
+      parameter is nil, see GetMessageBoxCaption. }
 end;
 
 procedure TExtUninstallLog.HandleException;
@@ -89,10 +88,11 @@ begin
   end;
 end;
 
-procedure InitializeUninstallProgressForm;
+procedure InitializeUninstallProgressForm(const MainIconPostfix, WizardIconsPostfix: String);
 begin
   UninstallProgressForm := AppCreateForm(TUninstallProgressForm) as TUninstallProgressForm;
-  UninstallProgressForm.Initialize(Title, UninstLog.AppName, ufModernStyle in UninstLog.Flags);
+  UninstallProgressForm.Initialize(Title, UninstLog.AppName, ufWizardModern in UninstLog.Flags,
+    MainIconPostfix, WizardIconsPostfix);
   if CodeRunner <> nil then begin
     try
       CodeRunner.RunProcedures('InitializeUninstallProgressForm', [''], False);
@@ -129,7 +129,7 @@ function LoggedMessageBoxFmt1(const ID: TSetupMessageID; const Arg1: String;
   const Title: String; const Flags: UINT; const Suppressible: Boolean;
   const Default: Integer): Integer;
 begin
-  Result := LoggedAppMessageBox(PChar(FmtSetupMessage1(ID, Arg1)), PChar(Title),
+  Result := LoggedMsgBox(PChar(FmtSetupMessage1(ID, Arg1)), PChar(Title),
     Flags, Suppressible, Default);
 end;
 
@@ -503,6 +503,33 @@ begin
     UninstLog := TExtUninstallLog.Create;
     UninstLog.Load(UninstDataFile, UninstDataFilename);
 
+    { Apply style - also see Setup.MainFunc's InitializeSetup }
+    var MainIconPostfix := '';
+    var WizardIconsPostfix := '';
+    IsWinDark := DarkModeActive;
+    const IsDynamicDark = (ufWizardDarkStyleDynamic in UninstLog.Flags) and IsWinDark;
+    const IsForcedDark = (ufWizardDarkStyleDark in UninstLog.Flags);
+    if IsDynamicDark then
+      MainIconPostfix := '_DARK';
+    if IsDynamicDark or IsForcedDark then begin
+      IsDarkInstallMode := True;
+      WizardIconsPostfix := '_DARK';
+    end;
+    if not HighContrastActive then begin
+      var StyleName := 'MYSTYLE1';
+      if IsDynamicDark then
+        StyleName := StyleName + '_DARK';
+      var Handle: TStyleManager.TStyleServicesHandle;
+      if TStyleManager.TryLoadFromResource(HInstance, StyleName, 'VCLSTYLE', Handle) then
+        TStyleManager.SetStyle(Handle);
+    end;
+
+    { Initialize SetupHeader items used by TSetupForm (LangOptions items already done) }
+    if ufWizardBorderStyled in UninstLog.Flags then
+      Include(SetupHeader.Options, shWizardBorderStyled);
+    SetupHeader.WizardSizePercentX := 100;
+    SetupHeader.WizardSizePercentY := 100;
+
     Title := FmtSetupMessage1(msgUninstallAppFullTitle, UninstLog.AppName);
 
     { If install was done in Win64, verify that we're still running Win64.
@@ -510,14 +537,14 @@ begin
       Windows version, or they're running an uninstaller from another machine
       (which they definitely shouldn't be doing). }
     if (ufWin64 in UninstLog.Flags) and not IsWin64 then begin
-      LoggedAppMessageBox(PChar(SetupMessages[msgUninstallOnlyOnWin64]), PChar(Title),
+      LoggedMsgBox(PChar(SetupMessages[msgUninstallOnlyOnWin64]), PChar(Title),
         MB_OK or MB_ICONEXCLAMATION, True, IDOK);
       Abort;
     end;
 
     { Check if admin privileges are needed to uninstall }
     if (ufAdminInstalled in UninstLog.Flags) and not IsAdmin then begin
-      LoggedAppMessageBox(PChar(SetupMessages[msgOnlyAdminCanUninstall]), PChar(Title),
+      LoggedMsgBox(PChar(SetupMessages[msgOnlyAdminCanUninstall]), PChar(Title),
         MB_OK or MB_ICONEXCLAMATION, True, IDOK);
       Abort;
     end;
@@ -620,7 +647,7 @@ begin
           FmtSetupMessage1(msgShutdownBlockReasonUninstallingApp, UninstLog.AppName));
 
         { Create and show the progress form }
-        InitializeUninstallProgressForm;
+        InitializeUninstallProgressForm(MainIconPostfix, WizardIconsPostfix);
 
         CurUninstallStepChanged(usUninstall, False);
 
@@ -718,7 +745,7 @@ begin
       Log('Restarting Windows.');
       RestartInitiatedByThisProcess := True;
       if not RestartComputer then begin
-        LoggedAppMessageBox(PChar(SetupMessages[msgErrorRestartingComputer]),
+        LoggedMsgBox(PChar(SetupMessages[msgErrorRestartingComputer]),
           PChar(SetupMessages[msgErrorTitle]), MB_OK or MB_ICONEXCLAMATION,
           True, IDOK);
       end;

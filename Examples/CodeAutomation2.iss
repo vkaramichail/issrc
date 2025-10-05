@@ -10,12 +10,12 @@
 [Setup]
 AppName=My Program
 AppVersion=1.5
-WizardStyle=modern
+WizardStyle=modern dynamic
 DisableWelcomePage=no
 CreateAppDir=no
+Uninstallable=no
 DisableProgramGroupPage=yes
 DefaultGroupName=My Program
-UninstallDisplayIcon={app}\MyProg.exe
 OutputDir=userdocs:Inno Setup Examples Output
 
 [Code]

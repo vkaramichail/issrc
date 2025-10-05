@@ -7,6 +7,16 @@ unit Setup.SetupForm;
   For conditions of distribution and use, see LICENSE.TXT.
 
   TSetupForm
+
+  Also used by UninstallProgressForm and UninstallSharedFileForm!
+
+  Requires following globals to be set:
+  -LangOptions.RightToLeft
+  -LangOptions.DialogFontName
+  -LangOptions.DialogFontSize
+  -shWizardBorderStyled in SetupHeader.Options
+  -SetupHeader.WizardSizePercentX
+  -SetupHeader.WizardSizePercentY
 }
 
 interface
@@ -23,7 +33,10 @@ type
     FFlipControlsOnShow: Boolean;
     FSizeAndCenterOnShow: Boolean;
     FControlsFlipped: Boolean;
+    FKeepSizeX: Boolean;
     FKeepSizeY: Boolean;
+    FSetForeground: Boolean;
+    procedure CMShowingChanged(var Message: TMessage); message CM_SHOWINGCHANGED;
     procedure WMQueryEndSession(var Message: TWMQueryEndSession); message WM_QUERYENDSESSION;
   protected
     procedure Center;
@@ -56,9 +69,11 @@ type
   published
     property ControlsFlipped: Boolean read FControlsFlipped;
     property FlipControlsOnShow: Boolean read FFlipControlsOnShow write FFlipControlsOnShow;
+    property KeepSizeX: Boolean read FKeepSizeX write FKeepSizeX;
     property KeepSizeY: Boolean read FKeepSizeY write FKeepSizeY;
     property RightToLeft: Boolean read FRightToLeft;
     property SizeAndCenterOnShow: Boolean read FSizeAndCenterOnShow write FSizeAndCenterOnShow;
+    property SetForeground: Boolean read FSetForeground write FSetForeground;
   end;
 
 procedure CalculateBaseUnitsFromFont(const Font: TFont; var X, Y: Integer);
@@ -75,7 +90,8 @@ implementation
 
 uses
   Generics.Collections, UITypes,
-  Shared.CommonFunc, Shared.CommonFunc.Vcl, Setup.MainFunc, BidiUtils;
+  BidiUtils,
+  Shared.Struct, Shared.CommonFunc, Shared.CommonFunc.Vcl, Setup.MainFunc;
 
 var
   WM_QueryCancelAutoPlay: UINT;
@@ -85,39 +101,6 @@ begin
   if not WorkArea or
      not SystemParametersInfo(SPI_GETWORKAREA, 0, @Result, 0) then
     Result := Rect(0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-end;
-
-function GetRectOfMonitorContainingRect(const R: TRect): TRect;
-{ Returns bounding rectangle of monitor containing or nearest to R }
-type
-  HMONITOR = type THandle;
-  TMonitorInfo = record
-    cbSize: DWORD;
-    rcMonitor: TRect;
-    rcWork: TRect;
-    dwFlags: DWORD;
-  end;
-const
-  MONITOR_DEFAULTTONEAREST = $00000002;
-var
-  Module: HMODULE;
-  MonitorFromRect: function(const lprc: TRect; dwFlags: DWORD): HMONITOR; stdcall;
-  GetMonitorInfo: function(hMonitor: HMONITOR; var lpmi: TMonitorInfo): BOOL; stdcall;
-  M: HMONITOR;
-  Info: TMonitorInfo;
-begin
-  Module := GetModuleHandle(user32);
-  MonitorFromRect := GetProcAddress(Module, 'MonitorFromRect');
-  GetMonitorInfo := GetProcAddress(Module, 'GetMonitorInfoA');
-  if Assigned(MonitorFromRect) and Assigned(GetMonitorInfo) then begin
-    M := MonitorFromRect(R, MONITOR_DEFAULTTONEAREST);
-    Info.cbSize := SizeOf(Info);
-    if GetMonitorInfo(M, Info) then begin
-      Result := Info.rcWork;
-      Exit;
-    end;
-  end;
-  Result := GetRectOfPrimaryMonitor(True);
 end;
 
 function SetFontNameSize(const AFont: TFont; const AName: String;
@@ -172,60 +155,21 @@ begin
   end;
 end;
 
-procedure NewChangeScale(const Ctl: TControl; const XM, XD, YM, YD: Integer);
-var
-  X, Y, W, H: Integer;
-begin
-  X := MulDiv(Ctl.Left, XM, XD);
-  Y := MulDiv(Ctl.Top, YM, YD);
-  if not(csFixedWidth in Ctl.ControlStyle) then
-    W := MulDiv(Ctl.Width, XM, XD)
-  else
-    W := Ctl.Width;
-  if not(csFixedHeight in Ctl.ControlStyle) then
-    H := MulDiv(Ctl.Height, YM, YD)
-  else
-    H := Ctl.Height;
-  Ctl.SetBounds(X, Y, W, H);
-end;
-
-procedure NewScaleControls(const Ctl: TWinControl; const XM, XD, YM, YD: Integer);
-{ This is like TControl.ScaleControls, except it allows the width and height
-  to be scaled independently }
-var
-  I: Integer;
-  C: TControl;
-begin
-  for I := 0 to Ctl.ControlCount-1 do begin
-    C := Ctl.Controls[I];
-    if C is TWinControl then begin
-      TWinControl(C).DisableAlign;
-      try
-        NewScaleControls(TWinControl(C), XM, XD, YM, YD);
-        NewChangeScale(C, XM, XD, YM, YD);
-      finally
-        TWinControl(C).EnableAlign;
-      end;
-    end
-    else
-      NewChangeScale(C, XM, XD, YM, YD);
-  end;
-end;
-
-function GetParentSetupForm(AControl: TControl): TSetupForm;
-begin
-  { Note: Unlike GetParentForm, this checks all levels, not just the top }
-  repeat
-    if AControl is TSetupForm then begin
-      Result := TSetupForm(AControl);
-      Exit;
-    end;
-    AControl := AControl.Parent;
-  until AControl = nil;
-  Result := nil;
-end;
-
 function IsParentSetupFormFlipped(AControl: TControl): Boolean;
+
+  function GetParentSetupForm(AControl: TControl): TSetupForm;
+  begin
+    { Note: Unlike GetParentForm, this checks all levels, not just the top }
+    repeat
+      if AControl is TSetupForm then begin
+        Result := TSetupForm(AControl);
+        Exit;
+      end;
+      AControl := AControl.Parent;
+    until AControl = nil;
+    Result := nil;
+  end;
+
 var
   ParentForm: TSetupForm;
 begin
@@ -234,47 +178,6 @@ begin
     Result := ParentForm.ControlsFlipped
   else
     Result := False;
-end;
-
-function IsParentSetupFormRightToLeft(AControl: TControl): Boolean;
-var
-  ParentForm: TSetupForm;
-begin
-  ParentForm := GetParentSetupForm(AControl);
-  if Assigned(ParentForm) then
-    Result := ParentForm.RightToLeft
-  else
-    Result := False;
-end;
-
-type
-  TControlAnchorsList = TDictionary<TControl, TAnchors>;
-  TControlAccess = class(TControl);
-
-procedure StripAndStoreCustomAnchors(const Ctl: TControl; const AnchorsList: TControlAnchorsList);
-var
-  I: Integer;
-begin
-  if Ctl.Anchors <> [akLeft, akTop] then begin
-    AnchorsList.Add(Ctl, Ctl.Anchors);
-    { Before we can set Anchors to [akLeft, akTop] (which has a special
-      'no anchors' meaning to VCL), we first need to update the Explicit*
-      properties so the control doesn't get moved back to an old position. }
-    TControlAccess(Ctl).UpdateExplicitBounds;
-    Ctl.Anchors := [akLeft, akTop];
-  end;
-
-  if Ctl is TWinControl then
-    for I := 0 to TWinControl(Ctl).ControlCount-1 do
-      StripAndStoreCustomAnchors(TWinControl(Ctl).Controls[I], AnchorsList);
-end;
-
-procedure RestoreAnchors(const Ctl: TControl; const AnchorsList: TControlAnchorsList);
-begin
-  { The order in which we restore the anchors shouldn't matter, so just
-    enumerate the list. }
-  for var Item in AnchorsList do
-    Item.Key.Anchors := Item.Value;
 end;
 
 { TSetupForm }
@@ -287,6 +190,11 @@ begin
   FFlipControlsOnShow := FRightToLeft;
   FSizeAndCenterOnShow := True;
   inherited;
+   { Setting BidiMode before inherited causes an AV when TControl tries to
+     send CM_BIDIMODECHANGED. This is why we have additonal RTL code in
+     CreateParams below. }
+  if FRightToLeft then
+    BiDiMode := bdRightToLeft;
   { In Delphi 2005 and later, Position defaults to poDefaultPosOnly, but we
     don't want the form to be changing positions whenever its handle is
     recreated, so change it to the D7 and earlier default of poDesigned. }
@@ -302,6 +210,8 @@ begin
   FFlipControlsOnShow := FRightToLeft;
   FSizeAndCenterOnShow := True;
   inherited;
+  if FRightToLeft then
+    BiDiMode := bdRightToLeft;
 end;
 
 function TSetupForm.CalculateButtonWidth(const ButtonCaptions: array of String): Integer;
@@ -348,6 +258,40 @@ begin
 end;
 
 procedure TSetupForm.CenterInsideRect(const InsideRect: TRect);
+
+  function GetRectOfMonitorContainingRect(const R: TRect): TRect;
+  { Returns bounding rectangle of monitor containing or nearest to R }
+  type
+    HMONITOR = type THandle;
+    TMonitorInfo = record
+      cbSize: DWORD;
+      rcMonitor: TRect;
+      rcWork: TRect;
+      dwFlags: DWORD;
+    end;
+  const
+    MONITOR_DEFAULTTONEAREST = $00000002;
+  var
+    Module: HMODULE;
+    MonitorFromRect: function(const lprc: TRect; dwFlags: DWORD): HMONITOR; stdcall;
+    GetMonitorInfo: function(hMonitor: HMONITOR; var lpmi: TMonitorInfo): BOOL; stdcall;
+    M: HMONITOR;
+    Info: TMonitorInfo;
+  begin
+    Module := GetModuleHandle(user32);
+    MonitorFromRect := GetProcAddress(Module, 'MonitorFromRect');
+    GetMonitorInfo := GetProcAddress(Module, 'GetMonitorInfoA');
+    if Assigned(MonitorFromRect) and Assigned(GetMonitorInfo) then begin
+      M := MonitorFromRect(R, MONITOR_DEFAULTTONEAREST);
+      Info.cbSize := SizeOf(Info);
+      if GetMonitorInfo(M, Info) then begin
+        Result := Info.rcWork;
+        Exit;
+      end;
+    end;
+    Result := GetRectOfPrimaryMonitor(True);
+  end;
+
 var
   R, MR: TRect;
 begin
@@ -392,15 +336,44 @@ begin
      not IsWindowOnTaskbar(Params.WndParent) then
     Params.WndParent := 0;
 
+  { See comment in Create. Also: The following does not make the title bar RTL.
+    Achieving this requires adding WS_EX_LAYOUTRTL, which VCL does not support. }
   if FRightToLeft then
     Params.ExStyle := Params.ExStyle or (WS_EX_RTLREADING or WS_EX_LEFTSCROLLBAR or WS_EX_RIGHT);
 end;
 
 procedure TSetupForm.CreateWnd;
+
+  function GetPPI: Integer;
+  begin
+    { Based on TSysStyleHook.GetCurrentPPI. Can't use the CurrentPPI property because it's only set
+      correctly if Scaled is True, but it's False in Setup. }
+    if CheckPerMonitorV2SupportForWindow(Handle) then begin { Currently always False in Setup }
+      { GetDPIForWindow requires Windows 10 version 1607. However, because it is delay-loaded and it's
+        never executed on older versions of Windows, it does not cause entry point not found errors. }
+      Result := GetDPIForWindow(Handle)
+    end else
+      Result := Screen.PixelsPerInch;
+  end;
+
 begin
   inherited;
   if WM_QueryCancelAutoPlay <> 0 then
     AddToWindowMessageFilterEx(Handle, WM_QueryCancelAutoPlay);
+  if not (shWizardBorderStyled in SetupHeader.Options) then begin
+    { SetDarkTitleBar also removes seBorder which disables styling of the titlebar and the border.
+      Note that removing seBorder in Create causes a small bit of space to the right of bevels for
+      some reason. Doing it here does not cause this problem. It's also here because SetDarkTitleBar
+      requires the handle of the form. }
+    SetDarkTitleBar(Self, IsDarkInstallMode);
+    { SetDarkTitleBar is a noop on older versions of Windows }
+    if seBorder in StyleElements then
+      StyleElements := StyleElements - [seBorder];
+  end;
+
+  { Styled form captions don't work correctly on high DPI, because they depend on a correct CurrentPPI }
+  if (GetPPI > 96) and (seBorder in StyleElements) then
+    StyleElements := StyleElements - [seBorder];
 end;
 
 procedure TSetupForm.FlipControlsIfNeeded;
@@ -416,7 +389,7 @@ procedure TSetupForm.SizeAndCenterIfNeeded(const ACenterInsideControl: Boolean; 
 begin
   if FSizeAndCenterOnShow then begin
     FSizeAndCenterOnShow := False;
-    { Apply custom initial size from script - depends on Anchors being set on all the controls }
+    { Apply custom initial size from script - depends on Align or Anchors being set on all the controls }
     if ShouldSizeX then
       ClientWidth := MulDiv(ClientWidth, SetupHeader.WizardSizePercentX, 100);
     if ShouldSizeY then
@@ -431,7 +404,7 @@ end;
 
 function TSetupForm.ShouldSizeX: Boolean;
 begin
-  Result := SetupHeader.WizardSizePercentX > 100;
+  Result := not FKeepSizeX and (SetupHeader.WizardSizePercentX > 100);
 end;
 
 function TSetupForm.ShouldSizeY: Boolean;
@@ -442,12 +415,86 @@ end;
 procedure TSetupForm.FlipSizeAndCenterIfNeeded(const ACenterInsideControl: Boolean;
   const CenterInsideControlCtl: TWinControl; const CenterInsideControlInsideClientArea: Boolean);
 begin
- { Flipping must be done first because when flipping after sizing the flipping might get old info for anchors that didn't do their work yet. }
+  { Flipping must be done first because when flipping after sizing the flipping might get old info
+    for anchors that didn't do their work yet }
   FlipControlsIfNeeded;
   SizeAndCenterIfNeeded(ACenterInsideControl, CenterInsideControlCtl, CenterInsideControlInsideClientArea);
 end;
 
+type
+  TControlAccess = class(TControl);
+
 procedure TSetupForm.InitializeFont;
+
+  procedure NewChangeScale(const Ctl: TControl; const XM, XD, YM, YD: Integer);
+  var
+    X, Y, W, H: Integer;
+  begin
+    X := MulDiv(Ctl.Left, XM, XD);
+    Y := MulDiv(Ctl.Top, YM, YD);
+    if not(csFixedWidth in Ctl.ControlStyle) then
+      W := MulDiv(Ctl.Width, XM, XD)
+    else
+      W := Ctl.Width;
+    if not(csFixedHeight in Ctl.ControlStyle) then
+      H := MulDiv(Ctl.Height, YM, YD)
+    else
+      H := Ctl.Height;
+    Ctl.SetBounds(X, Y, W, H);
+  end;
+
+  procedure NewScaleControls(const Ctl: TWinControl; const XM, XD, YM, YD: Integer);
+  { This is like TControl.ScaleControls, except it allows the width and height
+    to be scaled independently }
+  var
+    I: Integer;
+    C: TControl;
+  begin
+    for I := 0 to Ctl.ControlCount-1 do begin
+      C := Ctl.Controls[I];
+      if C is TWinControl then begin
+        TWinControl(C).DisableAlign;
+        try
+          NewScaleControls(TWinControl(C), XM, XD, YM, YD);
+          NewChangeScale(C, XM, XD, YM, YD);
+        finally
+          TWinControl(C).EnableAlign;
+        end;
+      end
+      else
+        NewChangeScale(C, XM, XD, YM, YD);
+    end;
+  end;
+
+  type
+    TControlAnchorsList = TDictionary<TControl, TAnchors>;
+
+  procedure StripAndStoreCustomAnchors(const Ctl: TControl; const AnchorsList: TControlAnchorsList);
+  var
+    I: Integer;
+  begin
+    if Ctl.Anchors <> [akLeft, akTop] then begin
+      AnchorsList.Add(Ctl, Ctl.Anchors);
+      { Before we can set Anchors to [akLeft, akTop] (which has a special
+        'no anchors' meaning to VCL), we first need to update the Explicit*
+        properties so the control doesn't get moved back to an old position. }
+      TControlAccess(Ctl).UpdateExplicitBounds;
+      Ctl.Anchors := [akLeft, akTop];
+    end;
+
+    if Ctl is TWinControl then
+      for I := 0 to TWinControl(Ctl).ControlCount-1 do
+        StripAndStoreCustomAnchors(TWinControl(Ctl).Controls[I], AnchorsList);
+  end;
+
+  procedure RestoreAnchors(const Ctl: TControl; const AnchorsList: TControlAnchorsList);
+  begin
+    { The order in which we restore the anchors shouldn't matter, so just
+      enumerate the list. }
+    for var Item in AnchorsList do
+      Item.Key.Anchors := Item.Value;
+  end;
+
 var
   ControlAnchorsList: TControlAnchorsList;
   W, H: Integer;
@@ -508,6 +555,14 @@ begin
     FlipSizeAndCenterIfNeeded;
 end;
 
+procedure TSetupForm.CMShowingChanged(var Message: TMessage);
+begin
+  inherited;
+  { This usually just makes the taskbar button flash }
+  if FSetForeground and Showing then
+    SetForegroundWindow(Handle);
+end;
+
 procedure TSetupForm.WMQueryEndSession(var Message: TWMQueryEndSession);
 begin
   { TDummyClass.AntiShutdownHook in Setup.dpr already denies shutdown attempts
@@ -537,6 +592,5 @@ end;
 
 initialization
   BidiUtils.IsParentFlippedFunc := IsParentSetupFormFlipped;
-  BidiUtils.IsParentRightToLeftFunc := IsParentSetupFormRightToLeft;
   WM_QueryCancelAutoPlay := RegisterWindowMessage('QueryCancelAutoPlay');
 end.

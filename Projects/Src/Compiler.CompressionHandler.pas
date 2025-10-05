@@ -49,7 +49,7 @@ type
       const AUseEncryption: Boolean; const ACryptKey: TSetupEncryptionKey);
     procedure ProgressProc(BytesProcessed: Cardinal);
     function ReserveBytesOnSlice(const Bytes: Cardinal): Boolean;
-    procedure WriteProc(const Buf; BufSize: Longint);
+    procedure WriteProc(const Buf; BufSize: Cardinal);
     property ChunkBytesRead: Int64 read FChunkBytesRead;
     property ChunkBytesWritten: Int64 read FChunkBytesWritten;
     property ChunkEncrypted: Boolean read FChunkEncrypted;
@@ -235,20 +235,17 @@ procedure TCompressionHandler.CompressFile(const SourceFile: TFile;
   Bytes: Int64; const CallOptimize: Boolean; out SHA256Sum: TSHA256Digest);
 var
   Context: TSHA256Context;
-  AddrOffset: LongWord;
-  BufSize: Cardinal;
+  AddrOffset: UInt32;
   Buf: array[0..65535] of Byte;
   { ^ *must* be the same buffer size used in Setup (TFileExtractor), otherwise
     the TransformCallInstructions call will break }
 begin
   SHA256Init(Context);
   AddrOffset := 0;
-  while True do begin
-    BufSize := SizeOf(Buf);
+  while Bytes > 0 do begin
+    var BufSize: Cardinal := SizeOf(Buf);
     if Bytes < BufSize then
-      BufSize := Bytes;
-    if BufSize = 0 then
-      Break;
+      BufSize := Cardinal(Bytes);
 
     SourceFile.ReadBuffer(Buf, BufSize);
     Inc(FChunkBytesRead, BufSize);
@@ -263,7 +260,7 @@ begin
   SHA256Sum := SHA256Final(Context);
 end;
 
-procedure TCompressionHandler.WriteProc(const Buf; BufSize: Longint);
+procedure TCompressionHandler.WriteProc(const Buf; BufSize: Cardinal);
 var
   P, P2: Pointer;
   S: Cardinal;

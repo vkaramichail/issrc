@@ -18,11 +18,12 @@ type
   TDetermineDefaultLanguageResult = (ddNoMatch, ddMatch, ddMatchLangParameter);
   TGetLanguageEntryProc = function(Index: Integer; var Entry: PSetupLanguageEntry): Boolean;
 
-function CreateTempDir(const LimitCurrentUserSidAccess: Boolean;
-  var Protected: Boolean): String; overload;
-function CreateTempDir(const LimitCurrentUserSidAccess: Boolean): String; overload;
+function CreateTempDir(const Extension: String;
+  const LimitCurrentUserSidAccess: Boolean; var Protected: Boolean): String; overload;
+function CreateTempDir(const Extension: String;
+  const LimitCurrentUserSidAccess: Boolean): String; overload;
 procedure DelayDeleteFile(const DisableFsRedir: Boolean; const Filename: String;
-  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Integer);
+  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
 function DetermineDefaultLanguage(const GetLanguageEntryProc: TGetLanguageEntryProc;
   const Method: TSetupLanguageDetectionMethod; const LangParameter: String;
   var ResultIndex: Integer): TDetermineDefaultLanguageResult;
@@ -34,7 +35,7 @@ function CreateSafeDirectory(const LimitCurrentUserSidAccess: Boolean; Path: Str
   var ErrorCode: DWORD; out Protected: Boolean): Boolean; overload;
 function CreateSafeDirectory(const LimitCurrentUserSidAccess: Boolean; Path: String;
   var ErrorCode: DWORD): Boolean; overload;
-function IntToBase32(Number: Longint): String;
+function UIntToBase36Str(AValue: UInt32; const ADigits: Integer): String;
 function GenerateUniqueName(const DisableFsRedir: Boolean; Path: String;
   const Extension: String): String;
 
@@ -133,51 +134,55 @@ begin
   Result := CreateSafeDirectory(LimitCurrentUserSidAccess, Path, ErrorCode, Protected);
 end;
 
-function IntToBase32(Number: Longint): String;
-const
-  Table: array[0..31] of Char = '0123456789ABCDEFGHIJKLMNOPQRSTUV';
-var
-  I: Integer;
+function UIntToBase36Str(AValue: UInt32; const ADigits: Integer): String;
 begin
-  Result := '';
-  for I := 0 to 4 do begin
-    Insert(Table[Number and 31], Result, 1);
-    Number := Number shr 5;
+  Result := StringOfChar('0', ADigits);
+  for var I := High(Result) downto Low(Result) do begin
+    var Digit := AValue mod 36;
+    if Digit < 10 then
+      Inc(Digit, Ord('0'))
+    else
+      Inc(Digit, Ord('A') - 10);
+    Result[I] := Chr(Digit);
+    AValue := AValue div 36;
   end;
 end;
 
 function GenerateUniqueName(const DisableFsRedir: Boolean; Path: String;
   const Extension: String): String;
-var
-  Rand, RandOrig: Longint;
-  Filename: String;
+const
+  FiveDigitsRange = 36 * 36 * 36 * 36 * 36;
 begin
   Path := AddBackslash(Path);
-  RandOrig := Random($2000000);
-  Rand := RandOrig;
+  var Filename: String;
+  var AttemptNumber := 0;
   repeat
-    Inc(Rand);
-    if Rand > $1FFFFFF then Rand := 0;
-    if Rand = RandOrig then
-      { practically impossible to go through 33 million possibilities,
-        but check "just in case"... }
+    { If 50 attempts were made and every generated name was found to exist
+      already, then stop trying, because something really strange is going
+      on -- like the file system is claiming everything exists regardless of
+      name. }
+    Inc(AttemptNumber);
+    if AttemptNumber > 50 then
       raise Exception.Create(FmtSetupMessage1(msgErrorTooManyFilesInDir,
         RemoveBackslashUnlessRoot(Path)));
-    { Generate a random name }
-    Filename := Path + 'is-' + IntToBase32(Rand) + Extension;
+
+    Filename := Path + 'is-' +
+      UIntToBase36Str(TStrongRandom.GenerateUInt32Range(FiveDigitsRange), 5) +
+      UIntToBase36Str(TStrongRandom.GenerateUInt32Range(FiveDigitsRange), 5) +
+      Extension;
   until not FileOrDirExistsRedir(DisableFsRedir, Filename);
   Result := Filename;
 end;
 
-function CreateTempDir(const LimitCurrentUserSidAccess: Boolean;
-  var Protected: Boolean): String;
+function CreateTempDir(const Extension: String;
+  const LimitCurrentUserSidAccess: Boolean; var Protected: Boolean): String;
 { This is called by SetupLdr, Setup, and Uninstall. }
 var
   Dir: String;
   ErrorCode: DWORD;
 begin
   while True do begin
-    Dir := GenerateUniqueName(False, GetTempDir, '.tmp');
+    Dir := GenerateUniqueName(False, GetTempDir, Extension);
     if CreateSafeDirectory(LimitCurrentUserSidAccess, Dir, ErrorCode, Protected) then
       Break;
     if ErrorCode <> ERROR_ALREADY_EXISTS then
@@ -188,10 +193,11 @@ begin
   Result := Dir;
 end;
 
-function CreateTempDir(const LimitCurrentUserSidAccess: Boolean): String;
+function CreateTempDir(const Extension: String;
+  const LimitCurrentUserSidAccess: Boolean): String;
 begin
   var Protected: Boolean;
-  Result := CreateTempDir(LimitCurrentUserSidAccess, Protected);
+  Result := CreateTempDir(Extension, LimitCurrentUserSidAccess, Protected);
 end;
 
 { Work around problem in D2's declaration of the function }
@@ -236,14 +242,12 @@ begin
 end;
 
 procedure DelayDeleteFile(const DisableFsRedir: Boolean; const Filename: String;
-  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Integer);
+  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
 { Attempts to delete Filename up to MaxTries times, retrying if the file is
   in use. It sleeps FirstRetryDelayMS msec after the first try, and
   SubsequentRetryDelayMS msec after subsequent tries. }
-var
-  I: Integer;
 begin
-  for I := 0 to MaxTries-1 do begin
+  for var I := 0 to MaxTries-1 do begin
     if I = 1 then
       Sleep(FirstRetryDelayMS)
     else if I > 1 then

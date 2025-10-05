@@ -36,7 +36,7 @@
         <DCC_SymbolReferenceInfo>1</DCC_SymbolReferenceInfo>
         <DCC_UnitSearchPath>..\Components\UniPs\Source;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <DCC_UsePackage>VCL30;vclx30;VclSmp30;vcldb30;vcldbx30;$(DCC_UsePackage)</DCC_UsePackage>
-        <DCC_Define>COMPIL32PROJ;PS_MINIVCL;PS_NOGRAPHCONST;PS_PANSICHAR;PS_NOINTERFACEGUIDBRACKETS;$(DCC_Define)</DCC_Define>
+        <DCC_Define>COMPIL32PROJ;VCLSTYLES;PS_MINIVCL;PS_NOGRAPHCONST;PS_PANSICHAR;PS_NOINTERFACEGUIDBRACKETS;$(DCC_Define)</DCC_Define>
         <SanitizedProjectName>Compil32</SanitizedProjectName>
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_MajorVer>0</VerInfo_MajorVer>
@@ -62,14 +62,14 @@
         <DCC_Define>RELEASE;$(DCC_Define)</DCC_Define>
         <DCC_DebugInformation>0</DCC_DebugInformation>
         <DCC_LocalDebugSymbols>false</DCC_LocalDebugSymbols>
-        <DCC_DcuOutput>Dcu\Release\$(MainSource)</DCC_DcuOutput>
+        <DCC_DcuOutput>Dcu\Win32\Release\$(MainSource)</DCC_DcuOutput>
         <DCC_ExeOutput>..\Files</DCC_ExeOutput>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2)'!=''">
         <DCC_Define>DEBUG;$(DCC_Define)</DCC_Define>
         <DCC_Optimize>false</DCC_Optimize>
         <DCC_GenerateStackFrames>true</DCC_GenerateStackFrames>
-        <DCC_DcuOutput>Dcu\Debug\$(MainSource)</DCC_DcuOutput>
+        <DCC_DcuOutput>Dcu\Win32\Debug\$(MainSource)</DCC_DcuOutput>
         <DCC_ExeOutput>Bin</DCC_ExeOutput>
         <Debugger_RunParams>Debug.iss</Debugger_RunParams>
     </PropertyGroup>
@@ -165,6 +165,7 @@
         <DCCReference Include="..\Components\ISSigFunc.pas"/>
         <DCCReference Include="..\Components\StringScanner.pas"/>
         <DCCReference Include="..\Components\Resample.pas"/>
+        <DCCReference Include="..\Components\UnsignedFunc.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

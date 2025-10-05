@@ -60,14 +60,14 @@
         <DCC_Define>RELEASE;$(DCC_Define)</DCC_Define>
         <DCC_DebugInformation>0</DCC_DebugInformation>
         <DCC_LocalDebugSymbols>false</DCC_LocalDebugSymbols>
-        <DCC_DcuOutput>Dcu\Release\$(MainSource)</DCC_DcuOutput>
+        <DCC_DcuOutput>Dcu\Win32\Release\$(MainSource)</DCC_DcuOutput>
         <DCC_ExeOutput>..\Files</DCC_ExeOutput>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2)'!=''">
         <DCC_Define>DEBUG;$(DCC_Define)</DCC_Define>
         <DCC_Optimize>false</DCC_Optimize>
         <DCC_GenerateStackFrames>true</DCC_GenerateStackFrames>
-        <DCC_DcuOutput>Dcu\Debug\$(MainSource)</DCC_DcuOutput>
+        <DCC_DcuOutput>Dcu\Win32\Debug\$(MainSource)</DCC_DcuOutput>
         <DCC_ExeOutput>Bin</DCC_ExeOutput>
         <Debugger_RunParams>/LOG=Setup.log</Debugger_RunParams>
     </PropertyGroup>
@@ -111,7 +111,6 @@
             <Form>SelectLanguageForm</Form>
         </DCCReference>
         <DCCReference Include="Src\Setup.FileExtractor.pas"/>
-        <DCCReference Include="Src\Shared.Int64Em.pas"/>
         <DCCReference Include="Src\Setup.SelectFolderForm.pas">
             <Form>SelectFolderForm</Form>
         </DCCReference>
@@ -144,7 +143,6 @@
         <DCCReference Include="Src\Setup.Helper.pas"/>
         <DCCReference Include="Src\Shared.VerInfoFunc.pas"/>
         <DCCReference Include="Src\Setup.RegDLL.pas"/>
-        <DCCReference Include="Src\Shared.ResUpdateFunc.pas"/>
         <DCCReference Include="Src\Setup.SpawnCommon.pas"/>
         <DCCReference Include="Src\Setup.SpawnServer.pas"/>
         <DCCReference Include="Src\Setup.SpawnClient.pas"/>
@@ -180,6 +178,9 @@
         <DCCReference Include="Src\Compression.SevenZipDLLDecoder.pas"/>
         <DCCReference Include="Src\Compression.SevenZipDLLDecoder.Interfaces.pas"/>
         <DCCReference Include="Src\Shared.EncryptionFunc.pas"/>
+        <DCCReference Include="..\Components\UnsignedFunc.pas"/>
+        <DCCReference Include="..\Components\Themes.pas"/>
+        <None Include="Src\Setup.inc"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

@@ -12,7 +12,7 @@ unit Setup.MainFunc;
 interface
 
 uses
-  Windows, SysUtils, Messages, Classes, Graphics, Controls, Forms, Dialogs,
+  Windows, SysUtils, Messages, Classes, Graphics, Controls, Forms, Dialogs, Generics.Collections,
   StdCtrls, Shared.Struct, Shared.DebugStruct, Shared.CommonFunc.Vcl, Shared.CommonFunc,
   Shared.SetupTypes, Setup.ScriptRunner, RestartManager;
 
@@ -24,6 +24,8 @@ type
   TShellFolderID = (sfDesktop, sfStartMenu, sfPrograms, sfStartup, sfSendTo,  //these have common and user versions
     sfFonts, sfAppData, sfDocs, sfTemplates,                                  //
     sfFavorites, sfLocalAppData, sfUserProgramFiles, sfUserCommonFiles, sfUserSavedGames); //these only have user versions
+
+  TWizardImages = TObjectList<TGraphic>;
 
 const
   EntryStrings: array[TEntryType] of Integer = (SetupLanguageEntryStrings,
@@ -109,8 +111,9 @@ var
   SetupHeader: TSetupHeader;
   LangOptions: TSetupLanguageEntry;
   Entries: array[TEntryType] of TList;
-  WizardImages: TList;
-  WizardSmallImages: TList;
+  WizardImages: TWizardImages;
+  WizardSmallImages: TWizardImages;
+  MainIconPostfix, WizardIconsPostfix: String;
   CloseApplicationsFilterList, CloseApplicationsFilterExcludesList: TStringList;
   ISSigAvailableKeys: TArrayOfECDSAKey;
 
@@ -137,7 +140,7 @@ var
   ShowLanguageDialog, MatchedLangParameter: Boolean;
   InstallMode: (imNormal, imSilent, imVerySilent);
   HasIcons, IsWin64, Is64BitInstallMode, IsAdmin, IsPowerUserOrAdmin, IsAdminInstallMode,
-    NeedPassword, NeedSerial, NeedsRestart, RestartSystem,
+    NeedPassword, NeedSerial, NeedsRestart, RestartSystem, IsWinDark, IsDarkInstallMode,
     IsUninstaller, AllowUninstallerShutdown, AcceptedQueryEndSessionInProgress: Boolean;
   InstallDefaultDisableFsRedir, ScriptFuncDisableFsRedir: Boolean;
   InstallDefaultRegView: TRegView = rvDefault;
@@ -195,10 +198,10 @@ function InstallOnThisVersion(const MinVersion: TSetupVersionData;
   const OnlyBelowVersion: TSetupVersionData): TInstallOnThisVersionResult;
 function IsRecurseableDirectory(const FindData: TWin32FindData): Boolean;
 procedure LoadSHFolderDLL;
-function LoggedAppMessageBox(const Text, Caption: PChar; const Flags: Longint;
-  const Suppressible: Boolean; const Default: Integer): Integer;
+function LoggedMsgBox(const Text, Caption: PChar; const Flags: Longint;
+  const Suppressible: Boolean; const Default: Integer): Integer; overload;
 function LoggedMsgBox(const Text, Caption: String; const Typ: TMsgBoxType;
-  const Buttons: Cardinal; const Suppressible: Boolean; const Default: Integer): Integer;
+  const Buttons: Cardinal; const Suppressible: Boolean; const Default: Integer): Integer; overload;
 function LoggedTaskDialogMsgBox(const Icon, Instruction, Text, Caption: String;
   const Typ: TMsgBoxType; const Buttons: Cardinal; const ButtonLabels: array of String;
   const ShieldButton: Integer; const Suppressible: Boolean; const Default: Integer;
@@ -238,7 +241,7 @@ function IsWindows11: Boolean;
 implementation
 
 uses
-  ShellAPI, ShlObj, StrUtils, ActiveX, RegStr, ChaCha20, ECDSA, ISSigFunc,
+  ShellAPI, ShlObj, StrUtils, ActiveX, RegStr, Imaging.pngimage, Themes, ChaCha20, ECDSA, ISSigFunc,
   SetupLdrAndSetup.Messages, Shared.SetupMessageIDs, Setup.DownloadFileFunc, Setup.ExtractFileFunc,
   SetupLdrAndSetup.InstFunc, Setup.InstFunc, SetupLdrAndSetup.RedirFunc, PathFunc,
   Compression.Base, Compression.Zlib, Compression.bzlib, Compression.LZMADecompressor,
@@ -1406,7 +1409,7 @@ procedure CreateTempInstallDirAndExtract64BitHelper;
   This is called by Setup, Uninstall, and RegSvr. }
 begin
   var Protected: Boolean;
-  TempInstallDir := CreateTempDir(IsAdmin and not Debugging, Protected);
+  TempInstallDir := CreateTempDir('.tmp', IsAdmin and not Debugging, Protected);
   LogFmt('Created %stemporary directory: %s', [IfThen(Protected, 'protected ', ''), TempInstallDir]);
   if Debugging then
     DebugNotifyTempDir(TempInstallDir);
@@ -2371,7 +2374,8 @@ end;
 
 function GetButtonsText(const Buttons: Cardinal): String;
 const
-  { We don't use this type, but end users are liable to in [Code] }
+  { We don't use this type, but end users are liable to in [Code].
+    Same applies to MB_ABORTRETRYIGNORE. }
   MB_CANCELTRYCONTINUE = $00000006;
 begin
   case Buttons and MB_TYPEMASK of
@@ -2387,32 +2391,32 @@ begin
   end;
 end;
 
-procedure LogSuppressedMessageBox(const Text: PChar; const Buttons: Cardinal;
+procedure LogSuppressedMsgBox(const Text: PChar; const Buttons: Cardinal;
   const Default: Integer);
 begin
   Log(Format('Defaulting to %s for suppressed message box (%s):' + SNewLine,
     [GetMessageBoxResultText(Default), GetButtonsText(Buttons)]) + Text);
 end;
 
-procedure LogMessageBox(const Text: PChar; const Buttons: Cardinal);
+procedure LogMsgBox(const Text: PChar; const Buttons: Cardinal);
 begin
   Log(Format('Message box (%s):' + SNewLine,
     [GetButtonsText(Buttons)]) + Text);
 end;
 
-function LoggedAppMessageBox(const Text, Caption: PChar; const Flags: Longint;
+function LoggedMsgBox(const Text, Caption: PChar; const Flags: Longint;
   const Suppressible: Boolean; const Default: Integer): Integer;
 begin
   if InitSuppressMsgBoxes and Suppressible then begin
-    LogSuppressedMessageBox(Text, Flags, Default);
+    LogSuppressedMsgBox(Text, Flags, Default);
     Result := Default;
   end else begin
-    LogMessageBox(Text, Flags);
-    Result := AppMessageBox(Text, Caption, Flags);
+    LogMsgBox(Text, Flags);
+    Result := MsgBox(Text, Caption, Flags);
     if Result <> 0 then
       LogFmt('User chose %s.', [GetMessageBoxResultText(Result)])
     else
-      Log('AppMessageBox failed.');
+      Log('MsgBox failed.');
   end;
 end;
 
@@ -2420,10 +2424,10 @@ function LoggedMsgBox(const Text, Caption: String; const Typ: TMsgBoxType;
   const Buttons: Cardinal; const Suppressible: Boolean; const Default: Integer): Integer;
 begin
   if InitSuppressMsgBoxes and Suppressible then begin
-    LogSuppressedMessageBox(PChar(Text), Buttons, Default);
+    LogSuppressedMsgBox(PChar(Text), Buttons, Default);
     Result := Default;
   end else begin
-    LogMessageBox(PChar(Text), Buttons);
+    LogMsgBox(PChar(Text), Buttons);
     Result := MsgBox(Text, Caption, Typ, Buttons);
     if Result <> 0 then
       LogFmt('User chose %s.', [GetMessageBoxResultText(Result)])
@@ -2438,10 +2442,10 @@ function LoggedTaskDialogMsgBox(const Icon, Instruction, Text, Caption: String;
   const VerificationText: String = ''; const pfVerificationFlagChecked: PBOOL = nil): Integer;
 begin
   if InitSuppressMsgBoxes and Suppressible then begin
-    LogSuppressedMessageBox(PChar(Text), Buttons, Default);
+    LogSuppressedMsgBox(PChar(Text), Buttons, Default);
     Result := Default;
   end else begin
-    LogMessageBox(PChar(Text), Buttons);
+    LogMsgBox(PChar(Text), Buttons);
     Result := TaskDialogMsgBox(Icon, Instruction, Text,
       Caption, Typ, Buttons, ButtonLabels, ShieldButton, VerificationText, pfVerificationFlagChecked);
     if Result <> 0 then begin
@@ -2528,7 +2532,6 @@ procedure InitializeCommonVars;
 begin
   IsAdmin := IsAdminLoggedOn;
   IsPowerUserOrAdmin := IsAdmin or IsPowerUserLoggedOn;
-  Randomize;
 end;
 
 procedure InitializeAdminInstallMode(const AAdminInstallMode: Boolean);
@@ -2628,7 +2631,8 @@ var
         Bytes := BytesLeft;
         if Bytes > SizeOf(Buf^) then Bytes := SizeOf(Buf^);
         Reader.Read(Buf^, Bytes);
-        Stream.WriteBuffer(Buf^, Bytes);
+        if Stream <> nil then
+          Stream.WriteBuffer(Buf^, Bytes);
         Dec(BytesLeft, Bytes);
       end;
     finally
@@ -2636,17 +2640,34 @@ var
     end;
   end;
 
-  function ReadWizardImage(const Reader: TCompressedBlockReader): TBitmap;
+  function ReadWizardImage(const Reader: TCompressedBlockReader): TGraphic;
   begin
     const MemStream = TMemoryStream.Create;
     try
       ReadFileIntoStream(Reader, MemStream);
       MemStream.Seek(0, soFromBeginning);
-      Result := TBitmap.Create;
-      Result.AlphaFormat := TAlphaFormat(SetupHeader.WizardImageAlphaFormat);
+      if TPngImage.CanLoadFromStream(MemStream) then
+        Result := TPngImage.Create
+      else begin
+        Result := TBitmap.Create;
+        TBitmap(Result).AlphaFormat := TAlphaFormat(SetupHeader.WizardImageAlphaFormat);
+      end;
       Result.LoadFromStream(MemStream);
     finally
       MemStream.Free;
+    end;
+  end;
+
+  procedure ReadWizardImages(const Reader: TCompressedBlockReader; const WizardImages: TWizardImages;
+    const WantImages: Boolean);
+  begin
+    var N: LongInt;
+    Reader.Read(N, SizeOf(LongInt));
+    for var I := 0 to N-1 do begin
+      if WantImages then
+        WizardImages.Add(ReadWizardImage(Reader))
+      else
+        ReadFileIntoStream(Reader, nil);
     end;
   end;
 
@@ -2785,7 +2806,7 @@ var
           if IsExcluded(SearchSubDir + FindData.cFileName, Excludes) then
             Continue;
 
-          Inc(Result, Int64(FindData.nFileSizeLow) or (Int64(FindData.nFileSizeHigh) shl 32));
+          Inc(Result, FindDataFileSizeToInt64(FindData));
         end;
       until not FindNextFile(H, FindData);
       Windows.FindClose(H);
@@ -2832,7 +2853,7 @@ var
             if IsExcluded(FindData.cFileName, Excludes) then
               Continue;
 
-            Inc(Result, Int64(FindData.nFileSizeLow) or (Int64(FindData.nFileSizeHigh) shl 32));
+            Inc(Result, FindDataFileSizeToInt64(FindData));
           end;
         until not ArchiveFindNextFile(H, FindData);
       finally
@@ -2894,7 +2915,7 @@ var
         else
           AppName := SetupHeader.AppName;
         if SetupHeader.PrivilegesRequired = prLowest then begin
-          case TaskDialogMsgBox('MAINICON', SetupMessages[msgPrivilegesRequiredOverrideInstruction],
+          case TaskDialogMsgBox('MAINICON' + MainIconPostfix, SetupMessages[msgPrivilegesRequiredOverrideInstruction],
                  FmtSetupMessage(msgPrivilegesRequiredOverrideText2, [AppName]),
                  SetupMessages[msgPrivilegesRequiredOverrideTitle], mbInformation, MB_YESNOCANCEL,
                  [SetupMessages[msgPrivilegesRequiredOverrideCurrentUserRecommended], SetupMessages[msgPrivilegesRequiredOverrideAllUsers]], IDNO) of
@@ -2903,7 +2924,7 @@ var
             IDCANCEL: Abort;
             end;
         end else begin
-          case TaskDialogMsgBox('MAINICON', SetupMessages[msgPrivilegesRequiredOverrideInstruction],
+          case TaskDialogMsgBox('MAINICON' + MainIconPostfix, SetupMessages[msgPrivilegesRequiredOverrideInstruction],
                  FmtSetupMessage(msgPrivilegesRequiredOverrideText1, [AppName]),
                  SetupMessages[msgPrivilegesRequiredOverrideTitle], mbInformation, MB_YESNOCANCEL,
                  [SetupMessages[msgPrivilegesRequiredOverrideAllUsersRecommended], SetupMessages[msgPrivilegesRequiredOverrideCurrentUser]], IDYES) of
@@ -2935,7 +2956,6 @@ var
   IsRespawnedProcess, EnableLogging, WantToSuppressMsgBoxes, Res: Boolean;
   DebugServerWnd: HWND;
   LogFilename: String;
-  SetupFilename: String;
   SetupFile: TFile;
   TestID: TSetupID;
   NameAndVersionMsg: String;
@@ -3074,8 +3094,13 @@ begin
   SetupMessages[msgSetupFileCorruptOrWrongVer] := SSetupFileCorruptOrWrongVer;
 
   { Read setup-0.bin, or from EXE }
+  var SetupFilename: String;
   if not SetupLdrMode then begin
     SetupFilename := PathChangeExt(SetupLdrOriginalFilename, '') + '-0.bin';
+    {$IFDEF DEBUG}
+    { Also see TFileExtractor.FindSliceFilename }
+    SetupFileName := SetupFileName.Replace('SetupCustomStyle', 'Setup');
+    {$ENDIF}
     if not NewFileExists(SetupFilename) then
       AbortInitFmt1(msgSetupFileMissing, PathExtractName(SetupFilename));
   end
@@ -3118,6 +3143,42 @@ begin
 
         if SetupEncryptionHeader.EncryptionUse = euFull then
           FileExtractor.CryptKey := CryptKey; { See above }
+
+        { Apply style - also see Setup.Uninstall's RunSecondPhase
+          Note: when debugging Setup.e32 or SetupCustomStyle.e32 it will see the default resources,
+          instead of the ones prepared by the compiler. This is because the .e32 is started, and
+          not the .exe prepared by the compiler. This is not noticable except for the VCL style
+          resources: the MYSTYLE1 and MYSTYLE1_DARK styles will always be missing. In this case
+          it will use the ZIRCON style, see below. This does *not* mean Uninstall will then
+          also use ZIRCON. To test Uninstall styling use a real Setup compiled by the
+          compiler.  }
+        var WantWizardImagesDynamicDark := False;
+        IsWinDark := DarkModeActive;
+        const IsDynamicDark = (SetupHeader.WizardDarkStyle = wdsDynamic) and IsWinDark;
+        const IsForcedDark = (SetupHeader.WizardDarkStyle = wdsDark);
+        if IsDynamicDark then begin
+          SetupHeader.WizardImageBackColor := SetupHeader.WizardImageBackColorDynamicDark;
+          SetupHeader.WizardSmallImageBackColor := SetupHeader.WizardSmallImageBackColorDynamicDark;
+          MainIconPostfix := '_DARK';
+          WantWizardImagesDynamicDark := True; { Handled below }
+        end;
+        if IsDynamicDark or IsForcedDark then begin
+          IsDarkInstallMode := True;
+          WizardIconsPostfix := '_DARK';
+        end;
+        if not HighContrastActive then begin
+          { Also see comment above }
+          var StyleName := 'MYSTYLE1';
+          if IsDynamicDark then
+            StyleName := StyleName + '_DARK';
+          var Handle: TStyleManager.TStyleServicesHandle;
+          if TStyleManager.TryLoadFromResource(HInstance, StyleName, 'VCLSTYLE', Handle)
+          {$IFDEF DEBUG}
+             or TStyleManager.TryLoadFromResource(HInstance, 'ZIRCON', 'VCLSTYLE', Handle)
+          {$ENDIF}
+          then
+            TStyleManager.SetStyle(Handle);
+        end;
 
         { Language entries }
         ReadEntriesWithoutVersion(Reader, seLanguage, SetupHeader.NumLanguageEntries,
@@ -3245,12 +3306,10 @@ begin
           Integer(@PSetupRunEntry(nil).MinVersion),
           Integer(@PSetupRunEntry(nil).OnlyBelowVersion));
         { Wizard images }
-        Reader.Read(N, SizeOf(LongInt));
-        for I := 0 to N-1 do
-          WizardImages.Add(ReadWizardImage(Reader));
-        Reader.Read(N, SizeOf(LongInt));
-        for I := 0 to N-1 do
-          WizardSmallImages.Add(ReadWizardImage(Reader));
+        ReadWizardImages(Reader, WizardImages, not WantWizardImagesDynamicDark);
+        ReadWizardImages(Reader, WizardSmallImages, not WantWizardImagesDynamicDark);
+        ReadWizardImages(Reader, WizardImages, WantWizardImagesDynamicDark);
+        ReadWizardImages(Reader, WizardSmallImages, WantWizardImagesDynamicDark);
         { Decompressor DLL }
         DecompressorDLL := nil;
         if SetupHeader.CompressMethod in [cmZip, cmBzip] then begin
@@ -3966,14 +4025,8 @@ begin
 end;
 
 procedure FreeWizardImages;
-var
-  I: Integer;
 begin
-  for I := WizardImages.Count-1 downto 0 do
-    TBitmap(WizardImages[I]).Free;
   FreeAndNil(WizardImages);
-  for I := WizardSmallImages.Count-1 downto 0 do
-    TBitmap(WizardSmallImages[I]).Free;
   FreeAndNil(WizardSmallImages);
 end;
 
@@ -3992,8 +4045,8 @@ initialization
   DeleteDirsAfterInstallList := TStringList.Create;
   CloseApplicationsFilterList := TStringList.Create;
   CloseApplicationsFilterExcludesList := TStringList.Create;
-  WizardImages := TList.Create;
-  WizardSmallImages := TList.Create;
+  WizardImages := TWizardImages.Create;
+  WizardSmallImages := TWizardImages.Create;
   SHGetKnownFolderPathFunc := GetProcAddress(SafeLoadLibrary(AddBackslash(GetSystemDir) + shell32,
     SEM_NOOPENFILEERRORBOX), 'SHGetKnownFolderPath');
 

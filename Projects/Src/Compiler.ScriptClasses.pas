@@ -33,6 +33,16 @@ begin
   end;
 end;
 
+procedure RegisterPngImage_C(Cl: TPSPascalCompiler);
+begin
+  with CL.AddClassN(CL.FindClass('TGraphic'),'TPngImage') do
+  begin
+    RegisterMethod('procedure LoadFromStream(Stream: TStream)');
+    RegisterMethod('procedure SaveToStream(Stream: TStream)');
+    RegisterProperty('Canvas', 'TCanvas', iptr);
+  end;
+end;
+
 procedure RegisterNewStaticText_C(Cl: TPSPascalCompiler);
 begin
   with Cl.AddClassN(Cl.FindClass('TWinControl'), 'TNewStaticText') do
@@ -241,9 +251,10 @@ begin
     RegisterProperty('Anchors', 'TAnchors', iptrw);
     RegisterProperty('AutoSize', 'Boolean', iptrw);
     RegisterProperty('BackColor', 'TColor', iptrw);
+    RegisterProperty('Bitmap', 'TBitmap', iptrw);
     RegisterProperty('Caption', 'String', iptrw);
     RegisterProperty('Center', 'Boolean', iptrw);
-    RegisterProperty('Bitmap', 'TBitmap', iptrw);
+    RegisterProperty('PngImage', 'TPngImage', iptrw);
     RegisterProperty('ReplaceColor', 'TColor', iptrw);
     RegisterProperty('ReplaceWithColor', 'TColor', iptrw);
     RegisterProperty('Stretch', 'Boolean', iptrw);
@@ -259,8 +270,9 @@ begin
     RegisterProperty('Anchors', 'TAnchors', iptrw);
     RegisterProperty('AutoSize', 'Boolean', iptrw);
     RegisterProperty('BackColor', 'TColor', iptrw);
-    RegisterProperty('Center', 'Boolean', iptrw);
     RegisterProperty('Bitmap', 'TBitmap', iptrw);
+    RegisterProperty('Center', 'Boolean', iptrw);
+    RegisterProperty('PngImage', 'TPngImage', iptrw);
     RegisterProperty('ReplaceColor', 'TColor', iptrw);
     RegisterProperty('ReplaceWithColor', 'TColor', iptrw);
     RegisterProperty('Stretch', 'Boolean', iptrw);
@@ -275,7 +287,10 @@ begin
   Cl.AddClassN(Cl.FindClass('TMemo'), 'TNewMemo');
   Cl.AddClassN(Cl.FindClass('TComboBox'), 'TNewComboBox');
   Cl.AddClassN(Cl.FindClass('TListBox'), 'TNewListBox');
-  Cl.AddClassN(Cl.FindClass('TButton'), 'TNewButton');
+  with Cl.AddClassN(Cl.FindClass('TButton'), 'TNewButton') do
+  begin
+    RegisterMethod('function AdjustHeightIfCommandLink: Integer');
+  end;
   Cl.AddClassN(Cl.FindClass('TCheckBox'), 'TNewCheckBox');
   Cl.AddClassN(Cl.FindClass('TRadioButton'), 'TNewRadioButton');
   with Cl.AddClassN(Cl.FindClass('TLinkLabel'), 'TNewLinkLabel') do
@@ -672,6 +687,8 @@ begin
 
   { ComObj }
   SIRegister_ComObj(Cl);
+
+  RegisterPngImage_C(Cl);
 
   RegisterNewStaticText_C(Cl);
   RegisterNewCheckListBox_C(Cl);

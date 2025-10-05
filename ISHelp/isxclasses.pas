@@ -170,6 +170,12 @@ TBitmap = class(TGraphic)
   property Handle: HBITMAP; read write;
 end;
 
+TPngImage = class(TGraphic)
+  procedure LoadFromStream(Stream: TStream);
+  procedure SaveToStream(Stream: TStream);
+  property Canvas: TCanvas; read write;
+end;
+
 TAlign = (alNone, alTop, alBottom, alLeft, alRight, alClient);
 
 TAnchorKind = (akLeft, akTop, akRight, akBottom);
@@ -179,6 +185,10 @@ TAnchors = set of TAnchorKind;
 TCursor = Integer;
 
 { TCursor values: crDefault, crNone, crArrow, crCross, crIBeam, crSizeNESW, crSizeNS, crSizeNWSE, crSizeWE, crUpArrow, crHourGlass, crDrag, crNoDrop, crHSplit, crVSplit, crMultiDrag, crSQLWait, crNo, crAppStart, crHelp, crHandPoint, crSizeAll, crHand }
+
+TStyleElement = (seFont, seClient, seBorder);
+
+TStyleElements = set of TStyleElement;
 
 TControl = class(TComponent)
   constructor Create(AOwner: TComponent);
@@ -203,6 +213,8 @@ TControl = class(TComponent)
   property Visible: Boolean; read write;
   property Enabled: Boolean; read write;
   property Cursor: TCursor; read write;
+  property StyleElements: TStyleElements; read write;
+  property StyleName: String; read write;
 end;
 
 TWinControl = class(TControl)
@@ -421,17 +433,23 @@ end;
 TButtonControl = class(TWinControl)
 end;
 
+TButtonStyle = (bsPushButton, bsCommandLink, bsSplitButton);
+
 TButton = class(TButtonControl)
   property Anchors: TAnchors; read write;
   property Cancel: Boolean; read write;
   property Caption: String; read write;
+  property CommandLinkHint: String; read write;
   property Default: Boolean; read write;
+  property ElevationRequired: Boolean; read write;
   property Font: TFont; read write;
   property ModalResult: Longint; read write;
+  property Style: TButtonStyle; read write;
   property OnClick: TNotifyEvent; read write;
 end;
 
 TNewButton = class(TButton)
+  function AdjustHeightIfCommandLink: Integer;
 end;
 
 TCustomCheckBox = class(TButtonControl)
@@ -671,9 +689,10 @@ TBitmapButton = class(TCustomControl)
   property Anchors: TAnchors; read write;
   property AutoSize: Boolean; read write;
   property BackColor: TColor; read write;
+  property Bitmap: TBitmap; read write;
   property Caption: Boolean; read write;
   property Center: Boolean; read write;
-  property Bitmap: TBitmap; read write;
+  property PngImage: TPngImage; read write;
   property ReplaceColor: TColor; read write;
   property ReplaceWithColor: TColor; read write;
   property Stretch: Boolean; read write;
@@ -685,8 +704,9 @@ TBitmapImage = class(TGraphicControl)
   property Anchors: TAnchors; read write;
   property AutoSize: Boolean; read write;
   property BackColor: TColor; read write;
-  property Center: Boolean; read write;
   property Bitmap: TBitmap; read write;
+  property Center: Boolean; read write;
+  property PngImage: TPngImage; read write;
   property ReplaceColor: TColor; read write;
   property ReplaceWithColor: TColor; read write;
   property Stretch: Boolean; read write;

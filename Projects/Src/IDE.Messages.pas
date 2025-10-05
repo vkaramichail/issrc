@@ -2,7 +2,7 @@ unit IDE.Messages;
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2025 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -50,6 +50,11 @@ const
   SWizardAppFiles2 = 'Please specify the files that are part of your application.';
   SWizardAppFiles3 = 'Please specify the source folder.';
   SWizardAppFilesSubDirsMessage = 'Should files in subfolders of "%s" also be included?';
+  SWizardAppFilesDownloadSourcePrompt = 'URL:';
+  SWizardAppFilesDownloadExtractArchiveMessage = 'Is the file to download an archive which should be extracted?';
+  SWizardAppFilesDownloadDestNamePrompt = 'Name of the file:';
+  SWizardAppFilesDownloadArchiveDestNamePrompt = 'Name of the file (extension should match archive format):';
+  SWizardAppFilesDownloadExternalSizePrompt = 'Approximate size of the file in megabytes:';
   SWizardAppExeFilter = 'Application files (*.exe)|*.exe|All files|*.*';
   SWizardAppExeDefaultExt = 'exe';
   SWizardAppAssoc = 'Application File Association';
@@ -73,6 +78,8 @@ const
   SWizardCompilerSetupIconFileFilter = 'Icon files (*.ico)|*.ico|All files|*.*';
   SWizardCompilerSetupIconFileDefaultExt = 'ico';
   SWizardCompilerOutputDir = 'Please specify the folder.';
+  SWizardWizardStyle = 'Wizard Style';
+  SWizardWizardStyle2 = 'Please specify which wizard style should be used.';
   SWizardISPP = 'Inno Setup Preprocessor';
   SWizardISPP2 = 'Please specify whether Inno Setup Preprocessor should be used.';
   SWizardISPPLabel = 'The [name] can use #define compiler directives to simplify your script. Although this is not necessary, it will make it easier to manually change the script later.' + SNewLine2 + 'Do you want the [name] to use #define compiler directives?';

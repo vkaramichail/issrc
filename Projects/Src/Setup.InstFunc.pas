@@ -12,7 +12,7 @@ unit Setup.InstFunc;
 interface
 
 uses
-  Windows, SysUtils, Shared.Int64Em, SHA256, Shared.CommonFunc, Shared.FileClass;
+  Windows, SysUtils, SHA256, Shared.CommonFunc, Shared.FileClass;
 
 type
   PSimpleStringListArray = ^TSimpleStringListArray;
@@ -64,9 +64,9 @@ function GetSHA256OfAnsiString(const S: AnsiString): TSHA256Digest;
 function GetSHA256OfUnicodeString(const S: UnicodeString): TSHA256Digest;
 function GetRegRootKeyName(const RootKey: HKEY): String;
 function GetSpaceOnDisk(const DisableFsRedir: Boolean; const DriveRoot: String;
-  var FreeBytes, TotalBytes: Integer64): Boolean;
+  var FreeBytes, TotalBytes: Int64): Boolean;
 function GetSpaceOnNearestMountPoint(const DisableFsRedir: Boolean;
-  const StartDir: String; var FreeBytes, TotalBytes: Integer64): Boolean;
+  const StartDir: String; var FreeBytes, TotalBytes: Int64): Boolean;
 function GetUserNameString: String;
 procedure IncrementSharedCount(const RegView: TRegView; const Filename: String;
   const AlreadyExisted: Boolean);
@@ -161,24 +161,28 @@ function GenerateNonRandomUniqueTempDir(const LimitCurrentUserSidAccess: Boolean
   existing directory was re-created. This is called by Uninstall. A non-random
   name is used because the uninstaller EXE isn't able to delete itself; if it were
   random, there would be one directory added each time an uninstaller is run. }
+const
+  RandRange = 36 * 36 * 36 * 36 * 36;
 var
-  Rand, RandOrig: Longint; { These are actually NOT random in any way }
   ErrorCode: DWORD;
 begin
   Path := AddBackslash(Path);
-  RandOrig := $123456;
-  Rand := RandOrig;
+  { These are actually NOT random in any way }
+  const RandOrig = UInt32((1*36*36*36*36) + (4*36*36*36) + ($D*36*36) + (2*36) + 22);
+    { + 1 = '14D2N' }
+  var Rand := RandOrig;
   repeat
     Result := False;
     Inc(Rand);
-    if Rand > $1FFFFFF then Rand := 0;
+    if Rand >= RandRange then
+      Rand := 0;
     if Rand = RandOrig then
-      { practically impossible to go through 33 million possibilities,
+      { practically impossible to go through 60 million combinations,
         but check "just in case"... }
       raise Exception.Create(FmtSetupMessage1(msgErrorTooManyFilesInDir,
         RemoveBackslashUnlessRoot(Path)));
     { Generate a "random" name }
-    TempDir := Path + 'iu-' + IntToBase32(Rand) + '.tmp';
+    TempDir := Path + 'iu-' + UIntToBase36Str(Rand, 5) + '.tmp';
     if DirExists(TempDir) then begin
       if not DeleteDirTree(TempDir) then Continue;
       Result := True;
@@ -962,7 +966,7 @@ begin
 end;
 
 function GetSpaceOnDisk(const DisableFsRedir: Boolean; const DriveRoot: String;
-  var FreeBytes, TotalBytes: Integer64): Boolean;
+  var FreeBytes, TotalBytes: Int64): Boolean;
 var
   GetDiskFreeSpaceExFunc: function(lpDirectoryName: PChar;
     lpFreeBytesAvailable: PLargeInteger; lpTotalNumberOfBytes: PLargeInteger;
@@ -984,19 +988,16 @@ begin
   try
     if Assigned(@GetDiskFreeSpaceExFunc) then begin
       Result := GetDiskFreeSpaceExFunc(PChar(AddBackslash(PathExpand(DriveRoot))),
-        @TLargeInteger(Int64Rec(FreeBytes)), @TLargeInteger(Int64Rec(TotalBytes)), nil);
+        @FreeBytes, @TotalBytes, nil);
     end
     else begin
       Result := GetDiskFreeSpace(PChar(AddBackslash(PathExtractDrive(PathExpand(DriveRoot)))),
-        DWORD(SectorsPerCluster), DWORD(BytesPerSector), DWORD(FreeClusters),
-        DWORD(TotalClusters));
+        SectorsPerCluster, BytesPerSector, FreeClusters, TotalClusters);
       if Result then begin
         { The result of GetDiskFreeSpace does not cap at 2GB, so we must use a
           64-bit multiply operation to avoid an overflow. }
-        Multiply32x32to64(BytesPerSector * SectorsPerCluster, FreeClusters,
-          FreeBytes);
-        Multiply32x32to64(BytesPerSector * SectorsPerCluster, TotalClusters,
-          TotalBytes);
+        FreeBytes := Int64(BytesPerSector * SectorsPerCluster) * FreeClusters;
+        TotalBytes := Int64(BytesPerSector * SectorsPerCluster) * TotalClusters;
       end;
     end;
   finally
@@ -1005,7 +1006,7 @@ begin
 end;
 
 function GetSpaceOnNearestMountPoint(const DisableFsRedir: Boolean;
-  const StartDir: String; var FreeBytes, TotalBytes: Integer64): Boolean;
+  const StartDir: String; var FreeBytes, TotalBytes: Int64): Boolean;
 { Gets the free and total space available on the specified directory. If that
   fails (e.g. if the directory does not exist), then it strips off the last
   component of the path and tries again. This repeats until it reaches the

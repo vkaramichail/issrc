@@ -19,7 +19,7 @@ implementation
 uses
   Windows, Messages, ShlObj, RegStr, Classes, SysUtils, Forms,
   ISSigFunc, PathFunc, SHA256,
-  Shared.CommonFunc, Shared.CommonFunc.Vcl, Shared.FileClass, Shared.Int64Em,
+  Shared.CommonFunc, Shared.CommonFunc.Vcl, Shared.FileClass,
   Shared.SetupMessageIDs, Shared.SetupTypes, Shared.Struct, Shared.VerInfoFunc,
   Compression.Base, Compression.SevenZipDLLDecoder,
   SetupLdrAndSetup.InstFunc, SetupLdrAndSetup.Messages, SetupLdrAndSetup.RedirFunc,
@@ -227,7 +227,7 @@ var
   ErrorCode: Longint;
   Z: String;
   MajorVersion, MinorVersion, I: Integer;
-  EstimatedSize: Integer64;
+  EstimatedSize: Int64;
 begin
   RegView := InstallDefaultRegView;
   RegViewIs64Bit := RegView = rv64Bit;
@@ -342,12 +342,11 @@ begin
     { Note: Windows 7 (and later?) doesn't automatically calculate sizes so set EstimatedSize ourselves. }
     if SetupHeader.UninstallDisplaySize = 0 then begin
       { Estimate the size by taking the size of all files and adding any ExtraDiskSpaceRequired. }
-      EstimatedSize := AfterInstallFilesSize;
-      Inc6464(EstimatedSize, SetupHeader.ExtraDiskSpaceRequired);
+      EstimatedSize := AfterInstallFilesSize + SetupHeader.ExtraDiskSpaceRequired;
       for I := 0 to Entries[seComponent].Count-1 do begin
         with PSetupComponentEntry(Entries[seComponent][I])^ do begin
           if ShouldProcessEntry(WizardComponents, nil, Name, '', Languages, '') then
-            Inc6464(EstimatedSize, ExtraDiskSpaceRequired);
+            Inc(EstimatedSize, ExtraDiskSpaceRequired);
         end;
       end;
     end else
@@ -355,9 +354,9 @@ begin
     { ARP on Windows 7 without SP1 only pays attention to the lower 6 bytes of EstimatedSize and
       throws away the rest. For example putting in $4000001 (=4GB + 1KB) displays as 1 KB.
       So we need to check for this. }
-    if (Hi(NTServicePackLevel) > 0) or IsWindows8 or (EstimatedSize.Hi = 0) then begin
-      Div64(EstimatedSize, 1024);
-      SetDWordValue(H2, 'EstimatedSize', EstimatedSize.Lo)
+    if (Hi(NTServicePackLevel) > 0) or IsWindows8 or (EstimatedSize <= High(Cardinal)) then begin
+      EstimatedSize := EstimatedSize div 1024;
+      SetDWordValue(H2, 'EstimatedSize', DWORD(EstimatedSize));
     end;
 
     { Also see SetPreviousData in ScriptFunc.pas }
@@ -1447,10 +1446,8 @@ procedure CopyFiles(const UninstLog: TUninstallLog; const ExpandedAppId: String;
               DestFile := DestFile + SearchSubDir + FileName
             else if SearchSubDir <> '' then
               DestFile := PathExtractPath(DestFile) + SearchSubDir + PathExtractName(DestFile);
-            var Size: Integer64;
-            Size.Hi := FindData.nFileSizeHigh;
-            Size.Lo := FindData.nFileSizeLow;
-            if Compare64(Size, ExpectedBytesLeft) > 0 then begin
+            var Size := FindDataFileSizeToInt64(FindData);
+            if Size > ExpectedBytesLeft then begin
               { Don't allow the progress bar to overflow if the size of the
                 files is greater than when we last checked }
               Size := ExpectedBytesLeft;
@@ -1578,10 +1575,8 @@ procedure CopyFiles(const UninstLog: TUninstallLog; const ExpandedAppId: String;
 
               var SourceFile := IntToStr(H);
               const DestFile = DestDir + FindData.cFileName;
-              var Size: Integer64;
-              Size.Hi := FindData.nFileSizeHigh;
-              Size.Lo := FindData.nFileSizeLow;
-              if Compare64(Size, ExpectedBytesLeft) > 0 then begin
+              var Size := FindDataFileSizeToInt64(FindData);
+              if Size > ExpectedBytesLeft then begin
                 { Don't allow the progress bar to overflow if the size of the
                   files is greater than when we last checked }
                 Size := ExpectedBytesLeft;
@@ -2802,8 +2797,14 @@ begin
       else if IsPowerUserOrAdmin then
         { Note: This flag is only set in 5.1.9 and later }
         Include(UninstLog.Flags, ufPowerUserInstalled);
-      if SetupHeader.WizardStyle = wsModern then
-        Include(UninstLog.Flags, ufModernStyle);
+      if shWizardModern in SetupHeader.Options then
+        Include(UninstLog.Flags, ufWizardModern);
+      if shWizardBorderStyled in SetupHeader.Options then
+        Include(UninstLog.Flags, ufWizardBorderStyled);
+      if SetupHeader.WizardDarkStyle = wdsDark then
+        Include(UninstLog.Flags, ufWizardDarkStyleDark)
+      else if SetupHeader.WizardDarkStyle = wdsDynamic then
+        Include(UninstLog.Flags, ufWizardDarkStyleDynamic);
       if shUninstallRestartComputer in SetupHeader.Options then
         Include(UninstLog.Flags, ufAlwaysRestart);
       if ChangesEnvironment then

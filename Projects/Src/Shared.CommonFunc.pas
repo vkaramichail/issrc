@@ -33,6 +33,19 @@ type
     function TimeRemaining: Cardinal;
   end;
 
+  TStrongRandom = record
+  strict private
+    class var
+      FBCryptGenRandomFunc: function(hAlgorithm: THandle; var pbBuffer;
+        cbBuffer: ULONG; dwFlags: ULONG): NTSTATUS; stdcall;
+    class procedure InitBCrypt; static;
+  public
+    class procedure GenerateBytes(out Buf; const Count: Cardinal); static;
+    class function GenerateUInt32: UInt32; static;
+    class function GenerateUInt32Range(const ARange: UInt32): UInt32; static;
+    class function GenerateUInt64: UInt64; static;
+  end;
+
   TLogProc = procedure(const S: String; const Error, FirstLine: Boolean; const Data: NativeInt);
   TOutputMode = (omLog, omCapture);
 
@@ -139,7 +152,7 @@ function GetPreferredUIFont: String;
 function IsWildcard(const Pattern: String): Boolean;
 function WildcardMatch(const Text, Pattern: PChar): Boolean;
 function IntMax(const A, B: Integer): Integer;
-function Win32ErrorString(ErrorCode: Integer): String;
+function Win32ErrorString(ErrorCode: DWORD): String;
 function DeleteDirTree(const Dir: String): Boolean;
 function SetNTFSCompression(const FileOrDir: String; Compress: Boolean): Boolean;
 procedure AddToWindowMessageFilterEx(const Wnd: HWND; const Msg: UINT);
@@ -150,11 +163,17 @@ procedure WaitMessageWithTimeout(const Milliseconds: DWORD);
 function MoveFileReplace(const ExistingFileName, NewFileName: String): Boolean;
 procedure TryEnableAutoCompleteFileSystem(Wnd: HWND);
 procedure CreateMutex(const MutexName: String);
+function HighContrastActive: Boolean;
+function CurrentWindowsVersionAtLeast(const AMajor, AMinor: Byte; const ABuild: Word = 0): Boolean;
+function DarkModeActive: Boolean;
+function CompareInt64(const N1, N2: Int64): Integer;
+function HighLowToInt64(const High, Low: UInt32): Int64;
+function FindDataFileSizeToInt64(const FindData: TWin32FindData): Int64;
 
 implementation
 
 uses
-  PathFunc;
+  PathFunc, UnsignedFunc;
 
 { Avoid including Variants (via ActiveX and ShlObj) in SetupLdr (SetupLdr uses CmnFunc2), saving 26 KB. }
 
@@ -244,7 +263,7 @@ end;
 function GetIniString(const Section, Key: String; Default: String;
   const Filename: String): String;
 var
-  BufSize, Len: Integer;
+  BufSize, Len: Cardinal;
 begin
   { On Windows 9x, Get*ProfileString can modify the lpDefault parameter, so
     make sure it's unique and not read-only }
@@ -387,7 +406,7 @@ var
 begin
   SetLength(Result, 255);
   repeat
-    Res := GetEnvironmentVariable(PChar(EnvVar), PChar(Result), Length(Result));
+    Res := GetEnvironmentVariable(PChar(EnvVar), PChar(Result), ULength(Result));
     if Res = 0 then begin
       Result := '';
       Break;
@@ -665,7 +684,7 @@ var
 begin
   SetLength(Result, MAX_PATH);
   repeat
-    Res := GetShortPathName(PChar(LongName), PChar(Result), Length(Result));
+    Res := GetShortPathName(PChar(LongName), PChar(Result), ULength(Result));
     if Res = 0 then begin
       Result := LongName;
       Break;
@@ -715,14 +734,13 @@ function GetSysWow64Dir: String;
 var
   GetSystemWow64DirectoryFunc: function(
     lpBuffer: PWideChar; uSize: UINT): UINT; stdcall;
-  Res: Integer;
   Buf: array[0..MAX_PATH] of Char;
 begin
   Result := '';
   GetSystemWow64DirectoryFunc := GetProcAddress(GetModuleHandle(kernel32),
       'GetSystemWow64DirectoryW');
   if Assigned(GetSystemWow64DirectoryFunc) then begin
-    Res := GetSystemWow64DirectoryFunc(Buf, SizeOf(Buf) div SizeOf(Buf[0]));
+    const Res = GetSystemWow64DirectoryFunc(Buf, SizeOf(Buf) div SizeOf(Buf[0]));
     if (Res > 0) and (Res < SizeOf(Buf) div SizeOf(Buf[0])) then
       Result := Buf;
   end;
@@ -831,7 +849,6 @@ function InternalRegQueryStringValue(H: HKEY; Name: PChar; var ResultStr: String
   Type1, Type2, Type3: DWORD): Boolean;
 var
   Typ, Size: DWORD;
-  Len: Integer;
   S: String;
   ErrorCode: Longint;
 label 1;
@@ -843,7 +860,7 @@ begin
     if Typ = REG_DWORD then begin
       var Data: DWORD;
       Size := SizeOf(Data);
-      if (RegQueryValueEx(H, Name, nil, @Typ, @Data, @Size) = ERROR_SUCCESS) and
+      if (RegQueryValueEx(H, Name, nil, @Typ, PByte(@Data), @Size) = ERROR_SUCCESS) and
          (Typ = REG_DWORD) and (Size = Sizeof(Data)) then begin
         ResultStr := Data.ToString;
         Result := True;
@@ -862,9 +879,9 @@ begin
         OutOfMemoryError;
       { Note: If Size isn't a multiple of SizeOf(S[1]), we have to round up
         here so that RegQueryValueEx doesn't overflow the buffer }
-      Len := (Size + (SizeOf(S[1]) - 1)) div SizeOf(S[1]);
+      var Len := (Size + (SizeOf(S[1]) - 1)) div SizeOf(S[1]);
       SetString(S, nil, Len);
-      ErrorCode := RegQueryValueEx(H, Name, nil, @Typ, @S[1], @Size);
+      ErrorCode := RegQueryValueEx(H, Name, nil, @Typ, PByte(@S[1]), @Size);
       if ErrorCode = ERROR_MORE_DATA then begin
         { The data must've increased in size since the first RegQueryValueEx
           call. Start over. }
@@ -954,7 +971,7 @@ begin
   if RegView <> rv64Bit then
     Result := RegDeleteKey(Key, Name)
   else begin
-    if @RegDeleteKeyExFunc = nil then
+    if not Assigned(RegDeleteKeyExFunc) then
       RegDeleteKeyExFunc := GetProcAddress(GetModuleHandle(advapi32),
           'RegDeleteKeyExW');
     if Assigned(RegDeleteKeyExFunc) then
@@ -983,7 +1000,7 @@ begin
       SetString(KeyName, nil, 256);
       I := 0;
       while True do begin
-        KeyNameCount := Length(KeyName);
+        KeyNameCount := ULength(KeyName);
         ErrorCode := RegEnumKeyEx(H, I, @KeyName[1], KeyNameCount, nil, nil, nil, nil);
         if ErrorCode = ERROR_MORE_DATA then begin
           { Double the size of the buffer and try again }
@@ -1097,7 +1114,6 @@ var
   Token: THandle;
   GroupInfoSize: DWORD;
   GroupInfo: PTokenGroups;
-  I: Integer;
 begin
   Result := False;
 
@@ -1137,7 +1153,7 @@ begin
            GroupInfoSize, GroupInfoSize) then
           Exit;
 
-        for I := 0 to GroupInfo.GroupCount-1 do begin
+        for var I := 0 to GroupInfo.GroupCount-1 do begin
           if EqualSid(Sid, GroupInfo.Groups[I].Sid) and
              (GroupInfo.Groups[I].Attributes and (SE_GROUP_ENABLED or
               SE_GROUP_USE_FOR_DENY_ONLY) = SE_GROUP_ENABLED) then begin
@@ -1199,7 +1215,7 @@ begin
   Result := False;
   DC := GetDC(0);
   try
-    EnumFonts(DC, PChar(FaceName), @FontExistsCallback, @Result);
+    EnumFonts(DC, PChar(FaceName), @FontExistsCallback, LPARAM(@Result));
   finally
     ReleaseDC(0, DC);
   end;
@@ -1372,14 +1388,13 @@ begin
     Result := B;
 end;
 
-function Win32ErrorString(ErrorCode: Integer): String;
+function Win32ErrorString(ErrorCode: DWORD): String;
 { Like SysErrorMessage but also passes the FORMAT_MESSAGE_IGNORE_INSERTS flag
   which allows the function to succeed on errors like 129 }
 var
-  Len: Integer;
   Buffer: array[0..1023] of Char;
 begin
-  Len := FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM or
+  var Len := FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM or
     FORMAT_MESSAGE_IGNORE_INSERTS or FORMAT_MESSAGE_ARGUMENT_ARRAY, nil,
     ErrorCode, 0, Buffer, SizeOf(Buffer) div SizeOf(Buffer[0]), nil);
   while (Len > 0) and ((Buffer[Len-1] <= ' ') or (Buffer[Len-1] = '.')) do
@@ -1577,6 +1592,65 @@ begin
   Windows.CreateMutex(@SecurityAttr, False, PChar(MutexName));
 end;
 
+function HighContrastActive: Boolean;
+begin
+  var HighContrast: THighContrast;
+  HighContrast.cbSize := SizeOf(HighContrast);
+  Result := False;
+  if SystemParametersInfo(SPI_GETHIGHCONTRAST, HighContrast.cbSize, @HighContrast, 0) then
+    Result := (HighContrast.dwFlags and HCF_HIGHCONTRASTON) <> 0;
+end;
+
+var
+  WindowsVersion: Cardinal;
+  WindowsVersionRead: Boolean;
+
+function CurrentWindowsVersionAtLeast(const AMajor, AMinor: Byte; const ABuild: Word = 0): Boolean;
+begin
+  if not WindowsVersionRead then begin
+    var OSVersionInfo: TOSVersionInfo;
+    OSVersionInfo.dwOSVersionInfoSize := SizeOf(OSVersionInfo);
+    GetVersionEx(OSVersionInfo);
+    WindowsVersion := (Byte(OSVersionInfo.dwMajorVersion) shl 24) or (Byte(OSVersionInfo.dwMinorVersion) shl 16) or Word(OSVersionInfo.dwBuildNumber);
+    WindowsVersionRead := True;
+  end;
+  Result := WindowsVersion >= Cardinal((AMajor shl 24) or (AMinor shl 16) or ABuild);
+end;
+
+function DarkModeActive: Boolean;
+var
+  K: HKEY;
+  Size, AppsUseLightTheme: DWORD;
+begin
+  Result := False;
+  if CurrentWindowsVersionAtLeast(10, 0) and (RegOpenKeyExView(rvDefault, HKEY_CURRENT_USER, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize', 0, KEY_QUERY_VALUE, K) = ERROR_SUCCESS) then begin
+    Size := SizeOf(AppsUseLightTheme);
+    if (RegQueryValueEx(K, 'AppsUseLightTheme', nil, nil, PByte(@AppsUseLightTheme), @Size) = ERROR_SUCCESS) and (AppsUseLightTheme = 0) then
+      Result := True;
+    RegCloseKey(K);
+  end;
+end;
+
+function CompareInt64(const N1, N2: Int64): Integer;
+begin
+  if N1 = N2 then
+    Result := 0
+  else if N1 > N2 then
+    Result := 1
+  else
+    Result := -1;
+end;
+
+function HighLowToInt64(const High, Low: UInt32): Int64;
+begin
+  Result := Int64((UInt64(High) shl 32) or Low);
+end;
+
+function FindDataFileSizeToInt64(const FindData: TWin32FindData): Int64;
+begin
+  Result := HighLowToInt64(FindData.nFileSizeHigh, FindData.nFileSizeLow);
+end;
+
 { TOneShotTimer }
 
 function TOneShotTimer.Expired: Boolean;
@@ -1622,6 +1696,68 @@ begin
     Result := FTimeout - Elapsed
   else
     Result := 0;
+end;
+
+{ TStrongRandom }
+
+class procedure TStrongRandom.GenerateBytes(out Buf; const Count: Cardinal);
+const
+  BCRYPT_USE_SYSTEM_PREFERRED_RNG = $00000002;
+begin
+  InitBCrypt;
+
+  { Zero-fill the buffer first to make it easier to tell if BCryptGenRandom is
+    succeeding without (entirely) filling the buffer. We don't actually expect
+    that to happen, though. (Not using FillChar here because it takes a signed
+    integer for the count.) }
+  var I := Count;
+  while I > 0 do begin
+    Dec(I);
+    PByte(@Buf)[I] := 0;
+  end;
+
+  const Status = FBCryptGenRandomFunc(0, Buf, Count, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  if Status <> 0 then
+    raise Exception.CreateFmt('TStrongRandom: BCryptGenRandom failed (0x%x)',
+      [Status]);
+end;
+
+class function TStrongRandom.GenerateUInt32: UInt32;
+begin
+  GenerateBytes(Result, SizeOf(Result));
+end;
+
+class function TStrongRandom.GenerateUInt32Range(const ARange: UInt32): UInt32;
+{ Like Delphi's Random function, returns a number in the range 0 to ARange-1 }
+begin
+  const R = GenerateUInt32;
+  Result := UInt32((UInt64(R) * ARange) shr 32);
+end;
+
+class function TStrongRandom.GenerateUInt64: UInt64;
+begin
+  GenerateBytes(Result, SizeOf(Result));
+end;
+
+class procedure TStrongRandom.InitBCrypt;
+begin
+  if Assigned(FBCryptGenRandomFunc) then
+    Exit;
+
+  { If this function is entered by multiple threads concurrently, this will
+    call LoadLibrary more than once, but that's fine }
+  const M = LoadLibrary(PChar(AddBackslash(GetSystemDir) + 'bcrypt.dll'));
+  if M = 0 then
+    raise Exception.Create('TStrongRandom: Failed to load bcrypt.dll');
+
+  const P = GetProcAddress(M, PAnsiChar('BCryptGenRandom'));
+  if P = nil then
+    raise Exception.Create('TStrongRandom: Failed to get address of BCryptGenRandom');
+
+  { Make sure the work of LoadLibrary is fully visible before making the
+    function pointer visible to other threads }
+  MemoryBarrier;
+  FBCryptGenRandomFunc := P;
 end;
 
 { TCreateProcessOutputReader }
@@ -1796,7 +1932,7 @@ procedure TCreateProcessOutputReader.Read(const LastRead: Boolean);
         if TotalBytesAvail > FMaxTotalBytesToRead - FTotalBytesRead then
           TotalBytesAvail := FMaxTotalBytesToRead - FTotalBytesRead;
         { Append newly available data to the incomplete line we might already have }
-        var TotalBytesHave: DWORD := Length(Pipe.Buffer);
+        var TotalBytesHave := ULength(Pipe.Buffer);
         SetLength(Pipe.Buffer, TotalBytesHave+TotalBytesAvail);
         var BytesRead: DWORD;
         Pipe.OKToRead := ReadFile(Pipe.PipeRead, Pipe.Buffer[TotalBytesHave+1],

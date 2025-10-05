@@ -9,12 +9,15 @@ unit NewCheckListBox;
 
   Note: TNewCheckListBox uses Items.Objects to store the item state. Don't use
   Item.Objects yourself, use ItemObject instead.
+
+  Define VCLSTYLES for full VCL Styles support.
 }
 
 interface
 
 uses
   Windows, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs,
+  {$IFDEF VCLSTYLES} Vcl.Themes, {$ELSE} Themes, {$ENDIF}
   StdCtrls, NewUxTheme;
 
 const
@@ -66,7 +69,8 @@ type
     FHotIndex: Integer;
     FDisableItemStateDeletion: Integer;
     FWheelAccum: Integer;
-    FUseRightToLeft: Boolean;
+    class constructor Create;
+    class destructor Destroy;
     procedure UpdateThemeData(const Close, Open: Boolean);
     function CanFocusItem(Item: Integer): Boolean;
     function CheckPotentialRadioParents(Index, ALevel: Integer): Boolean;
@@ -102,7 +106,6 @@ type
     procedure WMThemeChanged(var Message: TMessage); message WM_THEMECHANGED;
     procedure WMUpdateUIState(var Message: TMessage); message WM_UPDATEUISTATE;
   protected
-    procedure CreateParams(var Params: TCreateParams); override;
     procedure CreateWnd; override;
     procedure MeasureItem(Index: Integer; var Height: Integer); override;
     procedure DrawItem(Index: Integer; Rect: TRect; State: TOwnerDrawState);
@@ -200,12 +203,27 @@ type
     property WantTabs: Boolean read FWantTabs write FWantTabs default False;
   end;
 
+  TNewCheckListBoxStyleHook = class(TScrollingStyleHook)
+{$IFDEF VCLSTYLES}
+  strict private
+    FStyleColorsChecked: Boolean;
+    FStyleColorsCheckedWantTabs: Boolean;
+    procedure UpdateColors;
+  strict protected
+    procedure WndProc(var Message: TMessage); override;
+    procedure WMSetFocus(var Message: TMessage); message WM_SETFOCUS;
+    procedure WMKillFocus(var Message: TMessage); message WM_KILLFOCUS;
+  public
+    constructor Create(AControl: TWinControl); override;
+{$ENDIF}
+  end;
+
 procedure Register;
 
 implementation
 
 uses
-  Themes, NewUxTheme.TmSchema, PathFunc, ActiveX, BidiUtils, UITypes, Types;
+  NewUxTheme.TmSchema, PathFunc, ActiveX, BidiUtils, UITypes, Types;
 
 const
   sRadioCantHaveDisabledChildren = 'Radio item cannot have disabled child items';
@@ -379,6 +397,11 @@ end;
 
 { TNewCheckListBox }
 
+class constructor TNewCheckListBox.Create;
+begin
+  TCustomStyleEngine.RegisterStyleHook(TNewCheckListBox, TNewCheckListBoxStyleHook);
+end;
+
 constructor TNewCheckListBox.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -401,12 +424,6 @@ begin
   Style := lbOwnerDrawVariable;
   FHotIndex := -1;
   FCaptureIndex := -1;
-end;
-
-procedure TNewCheckListBox.CreateParams(var Params: TCreateParams);
-begin
-  inherited;
-  FUseRightToLeft := SetBiDiStyles(Self, Params);
 end;
 
 procedure TNewCheckListBox.CreateWnd;
@@ -443,6 +460,11 @@ procedure TNewCheckListBox.CreateWindowHandle(const Params: TCreateParams);
 begin
   inherited CreateWindowHandle(Params);
   UpdateThemeData(True, True);
+end;
+
+class destructor TNewCheckListBox.Destroy;
+begin
+  TCustomStyleEngine.UnRegisterStyleHook(TNewCheckListBox, TNewCheckListBoxStyleHook);
 end;
 
 destructor TNewCheckListBox.Destroy;
@@ -616,7 +638,7 @@ begin
       L := ItemStates[itemID].Level;
       if ItemStates[itemID].ItemType <> itGroup then Inc(L);
       rcItem.Left := rcItem.Left + (FCheckWidth + 2 * FOffset) * L;
-      FlipRect(rcItem, ClientRect, FUseRightToLeft);
+      FlipRect(rcItem, ClientRect, IsRightToLeft);
     end;
     { Don't let TCustomListBox.CNDrawItem draw the focus }
     if FWantTabs or
@@ -665,9 +687,7 @@ begin
     Inc(Rect.Left);
 
     if ItemState.SubItem <> '' then begin
-      DrawTextFormat := DT_CALCRECT or DT_NOCLIP or DT_NOPREFIX or DT_SINGLELINE;
-      if FUseRightToLeft then
-        DrawTextFormat := DrawTextFormat or (DT_RIGHT or DT_RTLREADING);
+      DrawTextFormat := DrawTextBiDiModeFlags(DT_CALCRECT or DT_NOCLIP or DT_NOPREFIX or DT_SINGLELINE);
       SetRectEmpty(SubItemRect);
       DrawText(Canvas.Handle, PChar(ItemState.SubItem), Length(ItemState.SubItem),
         SubItemRect, DrawTextFormat);
@@ -682,8 +702,7 @@ begin
     DrawTextFormat := DT_NOCLIP or DT_CALCRECT or DT_WORDBREAK or DT_WORD_ELLIPSIS;
     if not FWantTabs or (ItemState.ItemType = itGroup) then
       DrawTextFormat := DrawTextFormat or DT_NOPREFIX;
-    if FUseRightToLeft then
-      DrawTextFormat := DrawTextFormat or (DT_RIGHT or DT_RTLREADING);
+    DrawTextFormat := DrawTextBiDiModeFlags(DrawTextFormat);
 
     S := Items[Index]; { Passing Items[Index] directly into DrawText doesn't work on Unicode build. }
     ItemState.MeasuredHeight := DrawText(Canvas.Handle, PChar(S), Length(S), Rect, DrawTextFormat);
@@ -697,6 +716,11 @@ begin
       Inc(Height);
   end;
 end;
+
+const
+  ColorStates: array[Boolean] of TStyleColor = (scListBoxDisabled, scListBox);
+  TextLabelFontColorStates: array[Boolean] of TStyleFont = (sfTextLabelDisabled, sfTextLabelNormal);
+  ListItemFontColorStates: array[Boolean] of TStyleFont = (sfListItemTextDisabled, sfListItemTextNormal);
 
 procedure TNewCheckListBox.DrawItem(Index: Integer; Rect: TRect; State: TOwnerDrawState);
 const
@@ -720,7 +744,6 @@ const
     (CBS_CHECKEDNORMAL, CBS_CHECKEDHOT, CBS_CHECKEDPRESSED, CBS_CHECKEDDISABLED),
     (CBS_MIXEDNORMAL, CBS_MIXEDHOT, CBS_MIXEDPRESSED, CBS_MIXEDDISABLED)
   );
-  FontColorStates: array[Boolean] of TStyleFont = (sfListItemTextDisabled, sfListItemTextNormal);
   CheckListItemStates: array[Boolean] of TThemedCheckListBox = (tclListItemDisabled, tclListItemNormal);
   CheckBoxCheckedStates: array[Boolean] of TThemedButton = (tbCheckBoxCheckedDisabled, tbCheckBoxCheckedNormal);
   CheckBoxUncheckedStates: array[Boolean] of TThemedButton = (tbCheckBoxUncheckedDisabled, tbCheckBoxUncheckedNormal);
@@ -732,7 +755,7 @@ var
 
   function FlipX(const X: Integer): Integer;
   begin
-    if FUseRightToLeft then
+    if IsRightToLeft then
       Result := (SavedClientRect.Right - 1) - X
     else
       Result := X;
@@ -756,7 +779,7 @@ var
   end;
 
 var
-  Disabled: Boolean;
+  ItemDisabled: Boolean;
   uState, I, ThreadPosX, ThreadBottom, ThreadLevel, ItemMiddle,
     DrawTextFormat: Integer;
   CheckRect, SubItemRect, FocusRect: TRect;
@@ -775,11 +798,11 @@ begin
 
   SavedClientRect := ClientRect;
   { Undo flipping performed by TNewCheckListBox.CNDrawItem }
-  FlipRect(Rect, SavedClientRect, FUseRightToLeft);
+  FlipRect(Rect, SavedClientRect, IsRightToLeft);
 
   ItemState := ItemStates[Index];
   UIState := SendMessage(Handle, WM_QUERYUISTATE, 0, 0);
-  Disabled := not Enabled or not ItemState.Enabled;
+  ItemDisabled := not Enabled or not ItemState.Enabled;
 
   { Style code below is based on Vcl.StdCtrls' TCustomListBox.CNDrawItem and Vcl.CheckLst's
     TCustomCheckListBox.DrawItem and .DrawCheck }
@@ -798,15 +821,21 @@ begin
       end else
         Brush.Color := clHighlight;
     end else begin
-      if Disabled then
+      if ItemDisabled then
         NewTextColor := clGrayText
       else
         NewTextColor := Self.Font.Color;
       if (LStyle <> nil) and (seClient in StyleElements) then begin
-        Brush.Color := LStyle.GetStyleColor(scListBox);
+        if FWantTabs then
+          Brush.Color := LStyle.GetStyleColor(scWindow)
+        else
+          Brush.Color := LStyle.GetStyleColor(ColorStates[Enabled]);
         if seFont in StyleElements then begin
-          NewTextColor := LStyle.GetStyleFontColor(FontColorStates[not Disabled]);
-          const Details = LStyle.GetElementDetails(CheckListItemStates[Enabled]);
+          if FWantTabs then
+            NewTextColor := LStyle.GetStyleFontColor(TextLabelFontColorStates[not ItemDisabled])
+          else
+            NewTextColor := LStyle.GetStyleFontColor(ListItemFontColorStates[not ItemDisabled]);
+          const Details = LStyle.GetElementDetails(CheckListItemStates[not ItemDisabled]);
           var LColor: TColor;
           if LStyle.GetElementColor(Details, ecTextColor, LColor) and (LColor <> clNone) then
             NewTextColor := LColor;
@@ -838,23 +867,23 @@ begin
       CheckRect := Bounds(Rect.Left - (FCheckWidth + FOffset),
         Rect.Top + ((Rect.Bottom - Rect.Top - FCheckHeight) div 2),
         FCheckWidth, FCheckHeight);
-      FlipRect(CheckRect, SavedClientRect, FUseRightToLeft);
+      FlipRect(CheckRect, SavedClientRect, IsRightToLeft);
       if LStyle <> nil then begin
         var Detail: TThemedButton;
         if ItemState.State <> cbGrayed then begin
           if ItemState.ItemType = itCheck then begin
             if ItemState.State = cbChecked then
-              Detail := CheckBoxCheckedStates[not Disabled]
+              Detail := CheckBoxCheckedStates[not ItemDisabled]
             else
-              Detail := CheckBoxUncheckedStates[not Disabled];
+              Detail := CheckBoxUncheckedStates[not ItemDisabled];
           end else begin
             if ItemState.State = cbChecked then
-              Detail := RadioButtonCheckedStates[not Disabled]
+              Detail := RadioButtonCheckedStates[not ItemDisabled]
             else
-              Detail := RadioButtonUncheckedStates[not Disabled];
+              Detail := RadioButtonUncheckedStates[not ItemDisabled];
           end;
         end else
-          Detail := CheckBoxMixedStates[not Disabled];
+          Detail := CheckBoxMixedStates[not ItemDisabled];
         const ElementDetails = LStyle.GetElementDetails(Detail);
         const SaveColor = Brush.Color;
         const SaveIndex = SaveDC(Handle);
@@ -873,14 +902,14 @@ begin
         end;
         if FFlat then
           uState := uState or DFCS_FLAT;
-        if Disabled then
+        if ItemDisabled then
           uState := uState or DFCS_INACTIVE;
         if (FCaptureIndex = Index) and (FSpaceDown or (FLastMouseMoveIndex = Index)) then
           uState := uState or DFCS_PUSHED;
         DrawFrameControl(Handle, CheckRect, DFC_BUTTON, uState)
       end else begin
         PartId := ButtonPartIds[ItemState.ItemType];
-        if Disabled then
+        if ItemDisabled then
           StateId := ButtonStateIds[ItemState.State][cb2Disabled]
         else if Index = FCaptureIndex then
           if FSpaceDown or (FLastMouseMoveIndex = Index) then
@@ -896,7 +925,7 @@ begin
           CheckRect := Bounds(Rect.Left - (Size.cx + FOffset),
             Rect.Top + ((Rect.Bottom - Rect.Top - Size.cy) div 2),
             Size.cx, Size.cy);
-          FlipRect(CheckRect, SavedClientRect, FUseRightToLeft);
+          FlipRect(CheckRect, SavedClientRect, IsRightToLeft);
         end;
         //if IsThemeBackgroundPartiallyTransparent(FThemeData, PartId, StateId) then
         //  DrawThemeParentBackground(Self.Handle, Handle, @CheckRect);
@@ -904,16 +933,14 @@ begin
       end;
     end;
     { Draw SubItem }
-    FlipRect(Rect, SavedClientRect, FUseRightToLeft);
+    FlipRect(Rect, SavedClientRect, IsRightToLeft);
     FillRect(Rect);
-    FlipRect(Rect, SavedClientRect, FUseRightToLeft);
+    FlipRect(Rect, SavedClientRect, IsRightToLeft);
     Inc(Rect.Left);
     OldColor := SetTextColor(Handle, ColorToRGB(NewTextColor));
     if ItemState.SubItem <> '' then
     begin
-      DrawTextFormat := DT_NOCLIP or DT_NOPREFIX or DT_SINGLELINE or DT_VCENTER;
-      if FUseRightToLeft then
-        DrawTextFormat := DrawTextFormat or (DT_RIGHT or DT_RTLREADING);
+      DrawTextFormat := DrawTextBiDiModeFlags(DT_NOCLIP or DT_NOPREFIX or DT_SINGLELINE or DT_VCENTER);
       Font.Style := ItemState.SubItemFontStyle;
       SetRectEmpty(SubItemRect);
       InternalDrawText(ItemState.SubItem, SubItemRect, DrawTextFormat or
@@ -921,9 +948,9 @@ begin
       SubItemWidth := SubItemRect.Right + 2 * FOffset;
       SubItemRect := Rect;
       SubItemRect.Left := SubItemRect.Right - SubItemWidth + FOffset;
-      FlipRect(SubItemRect, SavedClientRect, FUseRightToLeft);
+      FlipRect(SubItemRect, SavedClientRect, IsRightToLeft);
       InternalDrawText(ItemState.SubItem, SubItemRect, DrawTextFormat,
-        FWantTabs and Disabled);
+        FWantTabs and ItemDisabled);
       Dec(Rect.Right, SubItemWidth);
     end
     else
@@ -937,8 +964,7 @@ begin
       DrawTextFormat := DrawTextFormat or DT_NOPREFIX;
     if (UIState and UISF_HIDEACCEL) <> 0 then
       DrawTextFormat := DrawTextFormat or DT_HIDEPREFIX;
-    if FUseRightToLeft then
-      DrawTextFormat := DrawTextFormat or (DT_RIGHT or DT_RTLREADING);
+    DrawTextFormat := DrawTextBiDiModeFlags(DrawTextFormat);
     Font.Style := ItemState.ItemFontStyle;
     { When you call DrawText with the DT_CALCRECT flag and there's a word wider
       than the rectangle width, it increases the rectangle width and wraps
@@ -950,10 +976,10 @@ begin
       Wrapping at the same place is important because it can affect how many
       lines are drawn -- and we mustn't draw too many. }
     InternalDrawText(Items[Index], Rect, DrawTextFormat or DT_CALCRECT, False);
-    FlipRect(Rect, SavedClientRect, FUseRightToLeft);
-    InternalDrawText(Items[Index], Rect, DrawTextFormat, FWantTabs and Disabled and (LStyle = nil));
+    FlipRect(Rect, SavedClientRect, IsRightToLeft);
+    InternalDrawText(Items[Index], Rect, DrawTextFormat, FWantTabs and ItemDisabled and (LStyle = nil));
     { Draw focus rectangle }
-    if FWantTabs and not Disabled and (odSelected in State) and Focused and
+    if FWantTabs and not ItemDisabled and (odSelected in State) and Focused and
       (UIState and UISF_HIDEFOCUS = 0) then
     begin
       FocusRect := Rect;
@@ -1180,7 +1206,7 @@ begin
   IRect := ItemRect(Index);
   Inc(IRect.Left, (FCheckWidth + 2 * Offset) * (ItemLevel[Index]));
   IRect.Right := IRect.Left + (FCheckWidth + 2 * Offset);
-  FlipRect(IRect, ClientRect, FUseRightToLeft);
+  FlipRect(IRect, ClientRect, IsRightToLeft);
   InvalidateRect(Handle, @IRect, FThemeData <> 0);
 end;
 
@@ -1867,6 +1893,85 @@ begin
     inherited;
 end;
 
+{$IFDEF VCLSTYLES}
+
+{ TNewCheckListBoxStyleHook - same as Vcl.StdCtrls' TListBoxStyleHook except that it picks the
+  correct colors when WantTabs is True }
+
+constructor TNewCheckListBoxStyleHook.Create(AControl: TWinControl);
+begin
+  inherited;
+  OverrideEraseBkgnd := True;
+  UpdateColors;
+end;
+
+procedure TNewCheckListBoxStyleHook.WMSetFocus(var Message: TMessage);
+begin
+  inherited;
+  CallDefaultProc(Message);
+  RedrawWindow(Handle, nil, 0, RDW_INVALIDATE or RDW_UPDATENOW);
+  Handled := True;
+end;
+
+procedure TNewCheckListBoxStyleHook.WndProc(var Message: TMessage);
+begin
+  if (Message.Msg = WM_ERASEBKGND) and (Control.StyleName <> '') then begin
+  	const WantTabs = (Control is TNewCheckListBox) and TNewCheckListBox(Control).WantTabs;
+  	if not FStyleColorsChecked or (FStyleColorsCheckedWantTabs <> WantTabs) then begin
+    	FStyleColorsChecked := True;
+    	FStyleColorsCheckedWantTabs := WantTabs;
+    	UpdateColors;
+    end;
+  end;
+
+  case Message.Msg of
+    CN_CTLCOLORMSGBOX..CN_CTLCOLORSTATIC:
+      begin
+        UpdateColors;
+        SetTextColor(Message.WParam, ColorToRGB(FontColor));
+        SetBkColor(Message.WParam, ColorToRGB(Brush.Color));
+        Message.Result := LRESULT(Brush.Handle);
+        Handled := True;
+      end;
+    CM_ENABLEDCHANGED:
+      begin
+        UpdateColors;
+        Handled := False; // Allow control to handle message
+      end
+  else
+    inherited WndProc(Message);
+  end;
+end;
+
+procedure TNewCheckListBoxStyleHook.UpdateColors;
+begin
+  const WantTabs = (Control is TNewCheckListBox) and TNewCheckListBox(Control).WantTabs;
+  const LStyle = StyleServices;
+
+	{ Also see color initialization in TNewCheckListBox.DrawItem }
+  if WantTabs then
+    Brush.Color := LStyle.GetStyleColor(scWindow)
+  else
+    Brush.Color := LStyle.GetStyleColor(ColorStates[Control.Enabled]);
+  if seFont in Control.StyleElements then begin
+    if WantTabs then
+      FontColor := LStyle.GetStyleFontColor(TextLabelFontColorStates[Control.Enabled])
+    else
+      FontColor := LStyle.GetStyleFontColor(ListItemFontColorStates[Control.Enabled])
+  end else
+  	FontColor := TWinControlAccess(Control).Font.Color;
+end;
+
+procedure TNewCheckListBoxStyleHook.WMKillFocus(var Message: TMessage);
+begin
+  inherited;
+  CallDefaultProc(Message);
+  RedrawWindow(Handle, nil, 0, RDW_INVALIDATE or RDW_UPDATENOW);
+  Handled := True;
+end;
+
+{$ENDIF}
+
 { TAccObject }
 
 constructor TAccObject.Create(AControl: TNewCheckListBox);
@@ -2176,6 +2281,7 @@ initialization
   end;
   InitThemeLibrary;
   NotifyWinEventFunc := GetProcAddress(GetModuleHandle(user32), 'NotifyWinEvent');
+    
 finalization
   if NeedToUninitialize then
     CoUninitialize;

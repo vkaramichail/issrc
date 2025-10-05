@@ -30,13 +30,16 @@ uses
   Shared.VerInfoFunc in 'Src\Shared.VerInfoFunc.pas',
   Shared.EncryptionFunc in 'Src\Shared.EncryptionFunc.pas',
   ChaCha20 in '..\Components\ChaCha20.pas',
-  PBKDF2 in '..\Components\PBKDF2.pas';
+  PBKDF2 in '..\Components\PBKDF2.pas',
+  UnsignedFunc in '..\Components\UnsignedFunc.pas';
 
 {$SETPEOSVERSION 6.1}
 {$SETPESUBSYSVERSION 6.1}
 {$WEAKLINKRTTI ON}
 
+{ The compiler may delete one of the icons included here }
 {$R Res\Setup.icon.res}
+{$R Res\Setup.icon.dark.res}
 {$R Res\SetupLdr.version.res}
 {$R Res\SetupLdr.offsettable.res}
 
@@ -111,7 +114,7 @@ procedure SetActiveLanguage(const I: Integer);
 { Activates the specified language }
 begin
   if (I >= 0) and (I < LanguageEntryCount) and (I <> ActiveLanguage) then begin
-    AssignSetupMessages(LanguageEntries[I].Data[1], Length(LanguageEntries[I].Data));
+    AssignSetupMessages(LanguageEntries[I].Data[1], ULength(LanguageEntries[I].Data));
     ActiveLanguage := I;
   end;
 end;
@@ -151,7 +154,7 @@ begin
         end
         else if WParam = 10001 then begin
           { Setup wants SetupLdr to change its active language }
-          PendingNewLanguage := LParam;
+          PendingNewLanguage := Integer(LParam);
         end;
       end;
   else
@@ -465,8 +468,7 @@ begin
 
         { Create a temporary directory, and extract the embedded setup program
           there }
-        Randomize;
-        TempDir := CreateTempDir(IsAdminLoggedOn);
+        TempDir := CreateTempDir('.tmp', IsAdminLoggedOn);
         S := AddBackslash(TempDir) + PathChangeExt(PathExtractName(SelfFilename), '.tmp');
         TempFile := S;  { assign only if string was successfully constructed }
 
@@ -555,5 +557,5 @@ begin
   except
     ShowExceptionMsg;
   end;
-  Halt(SetupLdrExitCode);
+  Halt(Word(SetupLdrExitCode));
 end.

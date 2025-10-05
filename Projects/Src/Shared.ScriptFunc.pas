@@ -287,7 +287,7 @@ initialization
     'function RegQueryMultiStringValue(const RootKey: Integer; const SubKeyName, ValueName: String; var ResultStr: String): Boolean;',
     'function RegDeleteKeyIncludingSubkeys(const RootKey: Integer; const SubkeyName: String): Boolean;',
     'function RegDeleteKeyIfEmpty(const RootKey: Integer; const SubkeyName: String): Boolean;',
-    //not really in CmnFunc2
+    //not really in CommonFunc
     'function RegKeyExists(const RootKey: Integer; const SubKeyName: String): Boolean;',
     'function RegDeleteValue(const RootKey: Integer; const SubKeyName, ValueName: String): Boolean;',
     'function RegGetSubkeyNames(const RootKey: Integer; const SubKeyName: String; var Names: TArrayOfString): Boolean;',
@@ -310,7 +310,8 @@ initialization
     'function CharLength(const S: String; const Index: Integer): Integer;',
     'function SetNTFSCompression(const FileOrDir: String; Compress: Boolean): Boolean;',
     'function IsWildcard(const Pattern: String): Boolean;',
-    'function WildcardMatch(const Text, Pattern: String): Boolean;'
+    'function WildcardMatch(const Text, Pattern: String): Boolean;',
+    'function HighContrastActive: Boolean;'
   ];
 
   ScriptFuncTables[sftInstall] :=
@@ -391,6 +392,8 @@ initialization
     'function SuppressibleTaskDialogMsgBox(const Instruction, Text: String; const Typ: TMsgBoxType; const Buttons: Cardinal; const ButtonLabels: TArrayOfString; const ShieldButton: Integer;'+' const Default: Integer): Integer;',
     'function IsWin64: Boolean;',
     'function Is64BitInstallMode: Boolean;',
+    'function IsWinDark: Boolean;',
+    'function IsDarkInstallMode: Boolean;',
     'function ProcessorArchitecture: TSetupProcessorArchitecture;',
     'function IsArm32Compatible: Boolean;',
     'function IsArm64: Boolean;',
