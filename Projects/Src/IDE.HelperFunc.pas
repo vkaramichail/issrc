@@ -16,11 +16,7 @@ uses
   Classes, Forms, Dialogs, Menus, Controls, StdCtrls, Graphics,
   ScintEdit, IDE.IDEScintEdit, ModernColors;
 
-const
-  MRUListMaxCount = 10;
-
 type
-  TMRUItemCompareProc = function(const S1, S2: String): Integer;
   TAddLinesPrefix = (alpNone, alpTimestamp, alpCountdown);
   TKeyMappingType = (kmtDelphi, kmtVisualStudio);
 
@@ -48,10 +44,6 @@ function GetDefaultMemoKeyMappingType: TIDEScintKeyMappingType;
 procedure LaunchFileOrURL(const AFilename: String; const AParameters: String = '');
 procedure OpenDonateSite;
 procedure OpenMailingListSite;
-procedure ClearMRUList(const MRUList: TStringList; const Section: String);
-procedure ReadMRUList(const MRUList: TStringList; const Section, Ident: String);
-procedure ModifyMRUList(const MRUList: TStringList; const Section, Ident: String;
-  const AItem: String; const AddNewItem: Boolean; CompareProc: TMRUItemCompareProc);
 procedure LoadKnownIncludedAndHiddenFiles(const AFilename: String; const IncludedFiles, HiddenFiles: TStringList);
 procedure SaveKnownIncludedAndHiddenFiles(const AFilename: String; const IncludedFiles, HiddenFiles: TStringList);
 procedure DeleteKnownIncludedAndHiddenFiles(const AFilename: String);
@@ -65,7 +57,7 @@ procedure SetFakeShortCut(const MenuItem: TMenuItem; const Key: Word;
 procedure SetFakeShortCut(const MenuItem: TMenuItem; const ShortCut: TShortCut); overload;
 procedure SaveTextToFile(const Filename: String;
   const S: String; const SaveEncoding: TSaveEncoding);
-procedure AddLines(const ListBox: TListBox; const S: String; const AObject: TObject; const LineBreaks: Boolean; const Prefix: TAddLinesPrefix; const PrefixParam: Cardinal);
+procedure AddLines(const ListBox: TListBox; const S: String; const AObject: TObject; const LineBreaks: Boolean; const Prefix: TAddLinesPrefix; const PrefixParam: Integer);
 procedure SetLowPriority(ALowPriority: Boolean; var SavePriorityClass: DWORD);
 procedure SetHelpFileDark(const Dark: Boolean);
 function GetHelpFile: String;
@@ -74,11 +66,10 @@ function FindOptionsToSearchOptions(const FindOptions: TFindOptions;
 function FindOptionsToSearchOptions(const MatchCase: Boolean;
   const RegEx: Boolean): TScintFindOptions; overload;
 function RegExToReplaceMode(const RegEx: Boolean): TScintReplaceMode;
-procedure StartAddRemovePrograms;
 function GetSourcePath(const AFilename: String): String;
 function ReadScriptLines(const ALines: TStringList; const ReadFromFile: Boolean;
   const ReadFromFileFilename: String; const NotReadFromFileMemo: TScintEdit): Integer;
-function CreateBitmapInfo(const Width, Height, BitCount: Integer): TBitmapInfo;
+function CreateBitmapInfo(const Width, Height: Integer; const BitCount: Word): TBitmapInfo;
 function GetPreferredMemoFont: String;
 function DoubleAmp(const S: String): String;
 
@@ -91,22 +82,24 @@ uses
   IDE.MainForm, IDE.Messages, Shared.ConfigIniFile;
 
 procedure InitFormFont(Form: TForm);
-var
-  FontName: String;
-  Metrics: TNonClientMetrics;
 begin
-  begin
-    Metrics.cbSize := SizeOf(Metrics);
-    if SystemParametersInfo(SPI_GETNONCLIENTMETRICS, SizeOf(Metrics),
-       @Metrics, 0) then
-      FontName := Metrics.lfMessageFont.lfFaceName;
-    { Only allow fonts that we know will fit the text correctly }
-    if not SameText(FontName, 'Microsoft Sans Serif') and
-       not SameText(FontName, 'Segoe UI') then
-      FontName := 'Tahoma';
-  end;
+  var Metrics: TNonClientMetrics;
+  var FontName: String;
+  Metrics.cbSize := SizeOf(Metrics);
+  if SystemParametersInfo(SPI_GETNONCLIENTMETRICS, SizeOf(Metrics),
+     @Metrics, 0) then
+    FontName := Metrics.lfMessageFont.lfFaceName;
+  { Only allow fonts that we know will fit the text correctly }
+  if not SameText(FontName, 'Microsoft Sans Serif') and
+     not SameText(FontName, 'Segoe UI') then
+    FontName := 'Tahoma';
+  var FontSize: Integer;
+  if SameText(FontName, 'Segoe UI') then
+    FontSize := 9
+  else
+    FontSize := 8;
   Form.Font.Name := FontName;
-  Form.Font.Size := 8;
+  Form.Font.Size := FontSize;
 end;
 
 procedure SetControlWindowTheme(const WinControl: TWinControl; const Dark: Boolean);
@@ -165,7 +158,7 @@ begin
   if WindowColor then begin
     Result := FormTheme.Colors[tcBack]; { This is white if not dark mode }
     if Result = clWhite then
-      Result := GetSysColor(COLOR_WINDOW); { For high contrast themes }
+      Result := clWindow; { For high contrast themes }
 	end else
     Result := FormTheme.Colors[tcToolBack]; { This is gray/btnface if not dark mode }
 end;
@@ -322,73 +315,6 @@ begin
   LaunchFileOrURL('https://jrsoftware.org/ismail.php');
 end;
 
-procedure ClearMRUList(const MRUList: TStringList; const Section: String);
-var
-  Ini: TConfigIniFile;
-begin
-  Ini := TConfigIniFile.Create;
-  try
-    MRUList.Clear;
-    Ini.EraseSection(Section);
-  finally
-    Ini.Free;
-  end;
-end;
-
-procedure ReadMRUList(const MRUList: TStringList; const Section, Ident: String);
-{ Loads a list of MRU items from the registry }
-var
-  Ini: TConfigIniFile;
-  I: Integer;
-  S: String;
-begin
-  Ini := TConfigIniFile.Create;
-  try
-    MRUList.Clear;
-    for I := 0 to MRUListMaxCount-1 do begin
-      S := Ini.ReadString(Section, Ident + IntToStr(I), '');
-      if S <> '' then MRUList.Add(S);
-    end;
-  finally
-    Ini.Free;
-  end;
-end;
-
-procedure ModifyMRUList(const MRUList: TStringList; const Section, Ident: String;
-  const AItem: String; const AddNewItem: Boolean; CompareProc: TMRUItemCompareProc);
-var
-  I: Integer;
-  Ini: TConfigIniFile;
-  S: String;
-begin
-  I := 0;
-  while I < MRUList.Count do begin
-    if CompareProc(MRUList[I], AItem) = 0 then
-      MRUList.Delete(I)
-    else
-      Inc(I);
-  end;
-  if AddNewItem then
-    MRUList.Insert(0, AItem);
-  while MRUList.Count > MRUListMaxCount do
-    MRUList.Delete(MRUList.Count-1);
-
-  { Save new MRU items }
-  Ini := TConfigIniFile.Create;
-  try
-    { MRU list }
-    for I := 0 to MRUListMaxCount-1 do begin
-      if I < MRUList.Count then
-        S := MRUList[I]
-      else
-        S := '';
-      Ini.WriteString(Section, Ident + IntToStr(I), S);
-    end;
-  finally
-    Ini.Free;
-  end;
-end;
-
 procedure LoadConfigIniList(const AIni: TConfigIniFile; const ASection, AIdent: String;
   const AList: TStringList; const ADelimiter: Char);
 begin
@@ -522,7 +448,7 @@ begin
       const TempSize = 64; { Same as Vcl.Touch.Keyboard.pas }
       var TempStr: String;
       SetLength(TempStr, TempSize);
-      ZeroMemory(@TempStr[1], TempSize * SizeOf(Char));
+      ZeroMemory(@TempStr[1], Cardinal(TempSize) * SizeOf(Char));
       var Size := ToUnicode(Key, ScanCode, KeyboardState, @TempStr[1], TempSize, 0);
       if Size = -1 then begin
         { This was a dead key, now stored in TempStr. Add space to get the dead
@@ -624,7 +550,7 @@ begin
   end;
 end;
 
-procedure AddLines(const ListBox: TListBox; const S: String; const AObject: TObject; const LineBreaks: Boolean; const Prefix: TAddLinesPrefix; const PrefixParam: Cardinal);
+procedure AddLines(const ListBox: TListBox; const S: String; const AObject: TObject; const LineBreaks: Boolean; const Prefix: TAddLinesPrefix; const PrefixParam: Integer);
 var
   ST: TSystemTime;
   LineNumber: Cardinal;
@@ -651,7 +577,7 @@ var
         end;
       alpCountdown:
         begin
-          Insert(Format('[%.2d]   ', [PrefixParam-LineNumber]), S, 1);
+          Insert(Format('[%.2d]   ', [Cardinal(PrefixParam)-LineNumber]), S, 1);
         end;
     end;
     try
@@ -772,42 +698,6 @@ begin
     Result := srmMinimal;
 end;
 
-procedure StartAddRemovePrograms;
-var
-  Dir: String;
-  Wow64DisableWow64FsRedirectionFunc: function(var OldValue: Pointer): BOOL; stdcall;
-  Wow64RevertWow64FsRedirectionFunc: function(OldValue: Pointer): BOOL; stdcall;
-  RedirDisabled: Boolean;
-  RedirOldValue: Pointer;
-  StartupInfo: TStartupInfo;
-  ProcessInfo: TProcessInformation;
-begin
-  Dir := GetSystemDir;
-
-  FillChar(StartupInfo, SizeOf(StartupInfo), 0);
-  StartupInfo.cb := SizeOf(StartupInfo);
-  { Have to disable file system redirection because the 32-bit version of
-    appwiz.cpl is buggy on XP x64 RC2 -- it doesn't show any Change/Remove
-    buttons on 64-bit MSI entries, and it doesn't list non-MSI 64-bit apps
-    at all. }
-  Wow64DisableWow64FsRedirectionFunc := GetProcAddress(GetModuleHandle(kernel32),
-    'Wow64DisableWow64FsRedirection');
-  Wow64RevertWow64FsRedirectionFunc := GetProcAddress(GetModuleHandle(kernel32),
-    'Wow64RevertWow64FsRedirection');
-  RedirDisabled := Assigned(Wow64DisableWow64FsRedirectionFunc) and
-    Assigned(Wow64RevertWow64FsRedirectionFunc) and
-    Wow64DisableWow64FsRedirectionFunc(RedirOldValue);
-  try
-    Win32Check(CreateProcess(nil, PChar('"' + AddBackslash(Dir) + 'control.exe" appwiz.cpl'),
-       nil, nil, False, 0, nil, PChar(Dir), StartupInfo, ProcessInfo));
-  finally
-    if RedirDisabled then
-      Wow64RevertWow64FsRedirectionFunc(RedirOldValue);
-  end;
-  CloseHandle(ProcessInfo.hProcess);
-  CloseHandle(ProcessInfo.hThread);
-end;
-
 function GetSourcePath(const AFilename: String): String;
 begin
   if AFilename <> '' then
@@ -863,7 +753,7 @@ begin
   Result := -1;
 end;
 
-function CreateBitmapInfo(const Width, Height, BitCount: Integer): TBitmapInfo;
+function CreateBitmapInfo(const Width, Height: Integer; const BitCount: Word): TBitmapInfo;
 begin
   ZeroMemory(@Result, SizeOf(Result));
   Result.bmiHeader.biSize := SizeOf(Result.bmiHeader);

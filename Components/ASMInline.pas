@@ -23,73 +23,82 @@ interface
   !!!! Not all special cases have been implemented in WriteRegRef().
 
   Further reduced to just what's needed for Inno Setup by Martijn Laan
+
+  Added x64 support by Martijn Laan
 }
+
+{$IFNDEF CPUX86}
+{$IFNDEF CPUX64}
+{$MESSAGE ERROR 'This needs updating for non-x86/x64 builds'}
+{$ENDIF}
+{$ENDIF}
+
+{$IFDEF CPUX86}
+{$WARN IMPLICIT_INTEGER_CAST_LOSS OFF}
+{$WARN IMPLICIT_CONVERSION_LOSS OFF}
+{$ENDIF}
 
 uses Sysutils, Windows, Classes, Contnrs;
 
 type
+{$IFDEF CPUX86}
   TModMode = (mmNaked, mmDeref, mmDisp8, mmDisp32);
-
   TRegister32 = (EAX, EBX, ECX, EDX, ESP, EBP, ESI, EDI);
-  TRegister32Set = set of TRegister32;
-  TRegister16 = (AX, BX, CX, DX, SP, BP, SI, DI);
-  TRegister16Set = set of TRegister16;
-  TRegister8 = (AH, AL, BH, BL, CH, CL, DH, DL);
-
-  TCLRegister = CL..CL;
-
   TMemSize = (ms8, ms16, ms32, ms64);
 
   TMemoryAddress = record
-    size: TMemSize;
-    usebase: boolean;
-    base, index: TRegister32;
-    offset: integer;
-    scale: byte;
+    Size: TMemSize;
+    UseBase: Boolean;
+    Base, Index: TRegister32;
+    Offset: Integer;
+    Scale: Byte;
   end;
 
-  EOperandSizeMismatch = class(exception)
+  EOperandSizeMismatch = class(Exception)
   public
-    constructor create;
+    constructor Create;
   end;
 
   TRelocType = (rt32Bit);
 
   TReloc = class
   public
-    position: longword;
-    relocType: TRelocType;
+    Position: Cardinal;
+    RelocType: TRelocType;
   end;
+{$ELSE}
+  TRegister64 = (RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8, R9, R10, R11, R12, R13, R14, R15);
+{$ENDIF}
 
   TASMInline = class
   private
-    fbuffer: TMemoryStream;
-    frelocs: TObjectList;
-    fbase: longword;
-
-    procedure AddRelocation(position: longword; relocType: TRelocType);
-
-    function GetReloc(index: integer): TReloc;
-    function RelocCount: integer;
-    property Relocs[index: integer]: TReloc read GetReloc;
-
-    procedure WriteByte(b: byte);
-    procedure WriteInteger(i: integer);
-    procedure WriteLongWord(l: longword);
-    procedure WriteRegRef(reg: byte; base: TRegister32; deref: boolean; index: TRegister32; Offset: integer; Scale: byte; usebase: boolean); overload;
+    FBuffer: TMemoryStream;
+{$IFDEF CPUX86}
+    FRelocs: TObjectList;
+    FBase: Cardinal;
+    procedure AddRelocation(position: Cardinal; relocType: TRelocType);
+    function GetReloc(index: Integer): TReloc;
+    function RelocCount: Integer;
+    property Relocs[index: Integer]: TReloc read GetReloc;
+    procedure WriteRegRef(reg: byte; base: TRegister32; deref: Boolean; index: TRegister32; Offset: Integer; Scale: byte; usebase: Boolean); overload;
     procedure WriteRegRef(mem: TMemoryAddress; reg: TRegister32); overload;
-    procedure WriteRegRef(reg: TRegister32; base: TRegister32; deref: boolean; index: TRegister32 = EAX; Offset: integer = 0; Scale: byte = 0; usebase: boolean = true); overload;
-  public
-    function Size: integer;
-
+    procedure WriteRegRef(reg: TRegister32; base: TRegister32; deref: Boolean; index: TRegister32 = EAX; Offset: Integer = 0; Scale: byte = 0; usebase: Boolean = true); overload;
     procedure Relocate(base: pointer);
-
-    function SaveAsMemory: pointer;
-    procedure SaveToMemory(target: pointer);
-
-    constructor create;
+{$ELSE}
+    function RegCode(const R: TRegister64): Byte;
+    procedure WriteREX(const W, R, X, B: Boolean);
+{$ENDIF}
+    procedure WriteByte(const B: Byte);
+    procedure WriteInteger(const I: Integer);
+{$IFNDEF CPUX86}
+    procedure WriteUInt64(const U: UInt64);
+{$ENDIF}
+  public
+    constructor Create;
     destructor Destroy; override;
-
+    function SaveAsMemory: Pointer;
+    function Size: Integer;
+{$IFDEF CPUX86}
     function Addr(base: TRegister32; offset: Integer; size: TMemSize = ms32): TMemoryAddress; overload;
 
     //PUSH reg
@@ -106,13 +115,25 @@ type
     //MOV reg, mem and MOV mem, reg
     procedure Mov(mem: TMemoryAddress; reg: TRegister32); overload;
     procedure Mov(reg: TRegister32; mem: TMemoryAddress); overload;
+{$ELSE}
+    procedure MovRegReg(const Dest, Src: TRegister64);
+    procedure MovRegImm64(const Dest: TRegister64; const Value: UInt64);
+    procedure MovRegMemRSP(const Dest: TRegister64; const Disp: Integer);
+    procedure MovMemRSPReg(const Disp: Integer; const Src: TRegister64);
+    procedure SubRsp(const Amount: Integer);
+    procedure AddRsp(const Amount: Integer);
+    procedure CallReg(const Reg: TRegister64);
+    procedure Ret;
+{$ENDIF}
   end;
 
 implementation
 
+{$IFDEF CPUX86}
+
 constructor EOperandSizeMismatch.create;
 begin
-  inherited create('Operand size mismatch');
+  inherited Create('Operand size mismatch');
 end;
 
 {Throw an exception if test<>match. Poor man's assert().
@@ -121,7 +142,7 @@ end;
 procedure require(test: TMemSize; match: TMemSize);
 begin
   if test <> match then
-    raise EOperandSizeMismatch.create;
+    raise EOperandSizeMismatch.Create;
 end;
 
 function regnum(reg: TRegister32): byte; overload;
@@ -135,7 +156,8 @@ begin
     EBP: result := 5;
     ESI: result := 6;
     EDI: result := 7;
-  else raise exception.create('Unknown register...');
+  else
+    raise Exception.create('Unknown register...');
   end;
 end;
 
@@ -146,19 +168,43 @@ begin
     mmDisp8: result := 1;
     mmDisp32: result := 2;
     mmNaked: result := 3;
-  else raise exception.create('Invalid mod mode: ' + inttostr(ord(m)));
+  else
+    raise Exception.create('Invalid mod mode: ' + inttostr(ord(m)));
   end;
 end;
 
 function EncodeSIB(scale, index, base: byte): byte;
 begin
-  result := base or (index shl 3) or (scale shl 6);
+  result := byte(base or (index shl 3) or (scale shl 6));
 end;
 
 function EncodeModRM(aMod, aReg, aRM: byte): byte; overload;
 begin
-  result := (aMod shl 6) or (areg shl 3) or aRM;
+  result := byte((aMod shl 6) or (areg shl 3) or aRM);
 end;
+
+{$ENDIF}
+
+{ TASMInline }
+
+constructor TASMInline.Create;
+begin
+  FBuffer := TMemoryStream.Create;
+{$IFDEF CPUX86}
+  FRelocs := TobjectList.Create;
+{$ENDIF}
+end;
+
+destructor TASMInline.Destroy;
+begin
+{$IFDEF CPUX86}
+  FRelocs.Free;
+{$ENDIF}
+  FBuffer.Free;
+  inherited;
+end;
+
+{$IFDEF CPUX86}
 
 {$IFOPT R+}
 {$DEFINE RESTORER}
@@ -169,11 +215,11 @@ end;
 {$Q-}
 {$ENDIF}
 procedure TASMInline.Relocate(base: pointer);
-var oldpos, diff, orig: integer;
+var diff, orig: integer;
   i: integer;
   reloc: TReloc;
 begin
-  oldpos := fbuffer.Position;
+  const oldpos = fbuffer.Position;
   try
 
     diff := -(longword(base) - fbase);
@@ -204,12 +250,12 @@ end;
 
 function TASMInline.GetReloc(index: integer): TReloc;
 begin
-  result := TReloc(frelocs[index]);
+  Result := TReloc(frelocs[index]);
 end;
 
 function TASMInline.RelocCount: integer;
 begin
-  result := frelocs.Count;
+  Result := frelocs.Count;
 end;
 
 procedure TASMInline.AddRelocation(position: longword; relocType: TRelocType);
@@ -221,22 +267,6 @@ begin
   frelocs.add(reloc);
 end;
 
-function TASMInline.SaveAsMemory: pointer;
-var buf: pointer;
-  oldprotect: Cardinal;
-begin
-  GetMem(buf, size);
-  VirtualProtect(buf, Size, PAGE_EXECUTE_READWRITE, oldprotect);
-  SaveToMemory(buf);
-  result := buf;
-end;
-
-procedure TASMInline.SaveToMemory(target: pointer);
-begin
-  Relocate(target);
-  Move(fbuffer.memory^, target^, size);
-end;
-
 function TASMInline.Addr(base: TRegister32; offset: Integer; size: TMemSize = ms32): TMemoryAddress;
 begin
   result.base := base;
@@ -244,26 +274,6 @@ begin
   result.offset := offset;
   result.size := size;
   result.usebase := true;
-end;
-
-function TASMInline.Size: integer;
-begin
-  result := fbuffer.size;
-end;
-
-procedure TASMInline.WriteInteger(i: integer);
-begin
-  fbuffer.write(i, 4);
-end;
-
-procedure TASMInline.writelongword(l: longword);
-begin
-  fbuffer.write(l, 4);
-end;
-
-procedure TASMInline.writebyte(b: byte);
-begin
-  fbuffer.write(b, 1);
 end;
 
 procedure TASMInline.Pop(reg: TRegister32);
@@ -361,7 +371,7 @@ begin
     //Do we have to append an offset?
   case offsize of
     os8: WriteByte(byte(offset)); //ignore sign..
-    os32: writelongword(longword(offset));
+    os32: WriteInteger(offset);
   end;
 end;
 
@@ -382,21 +392,134 @@ end;
 procedure TASMInline.Mov(reg: TRegister32; b: longword);
 begin
   writebyte($B8 + regnum(reg));
-  writelongword(b);
+  writeInteger(Integer(b));
 end;
 
-constructor TASMInline.create;
+{$ELSE}
+
+function TASMInline.RegCode(const R: TRegister64): Byte;
 begin
-  fbuffer := tmemorystream.create;
-  frelocs := tobjectlist.create;
+  Result := Byte(R);
 end;
 
-destructor TASMInline.destroy;
+procedure TASMInline.WriteREX(const W, R, X, B: Boolean);
 begin
-  fbuffer.free;
-  frelocs.free;
-  inherited;
+  var Prefix: Byte := $40;
+  if W then
+    Inc(Prefix, $08);
+  if R then
+    Inc(Prefix, $04);
+  if X then
+    Inc(Prefix, $02);
+  if B then
+    Inc(Prefix, $01);
+  WriteByte(Prefix);
 end;
+
+procedure TASMInline.MovRegReg(const Dest, Src: TRegister64);
+begin
+  const DestCode = RegCode(Dest);
+  const SrcCode = RegCode(Src);
+  WriteREX(True, SrcCode >= 8, False, DestCode >= 8);
+  WriteByte($89);
+  WriteByte(Byte($C0 or ((SrcCode and 7) shl 3) or (DestCode and 7)));
+end;
+
+procedure TASMInline.MovRegImm64(const Dest: TRegister64; const Value: UInt64);
+begin
+  const DestCode = RegCode(Dest);
+  WriteREX(True, False, False, DestCode >= 8);
+  WriteByte(Byte($B8 + (DestCode and 7)));
+  WriteUInt64(Value);
+end;
+
+procedure TASMInline.MovRegMemRSP(const Dest: TRegister64; const Disp: Integer);
+begin
+  const DestCode = RegCode(Dest);
+  WriteREX(True, DestCode >= 8, False, False);
+  WriteByte($8B);
+  WriteByte(Byte($84 or ((DestCode and 7) shl 3)));
+  WriteByte($24);
+  WriteInteger(Disp);
+end;
+
+procedure TASMInline.MovMemRSPReg(const Disp: Integer; const Src: TRegister64);
+begin
+  const SrcCode = RegCode(Src);
+  WriteREX(True, SrcCode >= 8, False, False);
+  WriteByte($89);
+  WriteByte(Byte($84 or ((SrcCode and 7) shl 3)));
+  WriteByte($24);
+  WriteInteger(Disp);
+end;
+
+procedure TASMInline.SubRsp(const Amount: Integer);
+begin
+  WriteByte($48);
+  WriteByte($81);
+  WriteByte($EC);
+  WriteInteger(Amount);
+end;
+
+procedure TASMInline.AddRsp(const Amount: Integer);
+begin
+  WriteByte($48);
+  WriteByte($81);
+  WriteByte($C4);
+  WriteInteger(Amount);
+end;
+
+procedure TASMInline.CallReg(const Reg: TRegister64);
+begin
+  const RegValue = RegCode(Reg);
+  WriteREX(False, False, False, RegValue >= 8);
+  WriteByte($FF);
+  WriteByte(Byte($D0 + (RegValue and 7)));
+end;
+
+procedure TASMInline.Ret;
+begin
+  WriteByte($C3);
+end;
+
+{$ENDIF}
+
+function TASMInline.SaveAsMemory: Pointer;
+begin
+  var Buf: Pointer;
+  GetMem(Buf, Size);
+  var OldProtect: Cardinal;
+  VirtualProtect(Buf, SIZE_T(Size), PAGE_EXECUTE_READWRITE, OldProtect);
+{$IFDEF CPUX86}
+  Relocate(Buf);
+{$ENDIF}
+  Move(FBuffer.memory^, Buf^, Size);
+  Result := Buf;
+end;
+
+function TASMInline.Size: Integer;
+begin
+  if FBuffer.Size > High(Integer) then
+    raise Exception.Create('Unexpected Size value');
+  Result := Integer(FBuffer.Size);
+end;
+
+procedure TASMInline.WriteByte(const B: Byte);
+begin
+  FBuffer.Write(B, SizeOf(B));
+end;
+
+procedure TASMInline.WriteInteger(const I: Integer);
+begin
+  FBuffer.Write(I, SizeOf(I));
+end;
+
+{$IFNDEF CPUX86}
+procedure TASMInline.WriteUInt64(const U: UInt64);
+begin
+  FBuffer.Write(U, SizeOf(U));
+end;
+{$ENDIF}
 
 end.
 

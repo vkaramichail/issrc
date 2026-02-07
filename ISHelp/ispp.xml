@@ -339,7 +339,7 @@
 				</description>
 				<section title="Examples">
 					<pre>
-						<line>#expr <link href="savetofile">SaveToFile</link>(AddBackslash(SourcePath) + "Preprocessed.iss"), <link href="exec">Exec</link>(AddBackslash(CompilerPath) + "Compil32.exe", """" + AddBackslash(SourcePath) + "Preprocessed.iss""")</line>
+						<line>#expr <link href="savetofile">SaveToFile</link>(AddBackslash(SourcePath) + "Preprocessed.iss"), <link href="exec">Exec</link>(AddBackslash(CompilerPath) + "ISIDE.exe", """" + AddBackslash(SourcePath) + "Preprocessed.iss""")</line>
 					</pre>
 				</section>
 				<section title="See also">
@@ -355,7 +355,7 @@
 					</define>
 				</syntax>
 				<description>
-					<p>Changes the insertion point. By default, each processed line is added to the end of the &translation;. Using &insert; the point at which the next processed line will be added to the &translation; can be changed. &insert; takes an expression which must evaluate to an integer. The insertion point will be set to this integer.</p>
+					<p>Changes the insertion point. By default, each processed line is appended to the end of the &translation;. Using &insert; the point at which the next processed line will be inserted into the &translation; can be set. &insert; takes an expression which must evaluate to a 0-based line index. If this index is 0, the next processed line is inserted at the beginning of the &translation;. If this index is 1, the next processed line is put in the second position of the &translation;, and so on.</p>
 					<p>The insertion point is also always automatically incremented each time after a line has been added to the &translation;, so that each new line is inserted after the one previously inserted.</p>
 					<p>It is not recommended to use script generating functions (such as <tt><link href="SetSetupSetting">SetSetupSetting</link></tt>) which may insert a line by themselves, thus shifting a part of the &translation; one line down, whereas insertion point is not updated. This may result in different insertion point than expected.</p>
 					<p>The <tt><link href="find">Find</link></tt> function can be used to produce values for the &insert; directive.</p>
@@ -489,7 +489,7 @@
 					</define>
 				</syntax>
 				<description>
-					<p>Use the &for; directive to get loop behaviour. &for; takes 4 expressions. The first expression (<tt>expr1</tt>) is called "initialization expression," the second expression (<tt>expr2</tt>) "condition," the third expression (<tt>expr3</tt>) "action," and the final expression (<tt>expr4</tt>) "loop body."</p>
+					<p>Use the &for; directive to get loop behaviour. &for; takes 4 expressions. The first expression (<tt>expr1</tt>) is called "initialization expression", the second expression (<tt>expr2</tt>) "condition", the third expression (<tt>expr3</tt>) "action", and the final expression (<tt>expr4</tt>) "loop body".</p>
 					<p>The logic the &for; directive follows is:</p>
 					<p>&dsp;1. The initialization expression is evaluated.</p>
 					<p>&dsp;2. The condition is evaluated. If it evaluates to 0, the loop ends.</p>
@@ -716,7 +716,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				<description>
 					<p>Retrieves string from specified file's (first parameter) version information resource.</p>
 					<p>Second parameter is the name of the version info string-value. This should be one of the predefined strings. Those strings and shortcuts are declared in &builtins;.</p>
-					<p>Third optional parameter should specify the language and charset identifier. For example: 0x04BE0409 stands for "English (United States)." If this parameter is omitted, ISPP scans for all available version info blocks to find the value.</p>
+					<p>Third optional parameter should specify the language and charset identifier. For example: 0x04BE0409 stands for "English (United States)". If this parameter is omitted, ISPP scans for all available version info blocks to find the value.</p>
 					<p>The function returns an empty string, if it was unable to retrieve the desired string-value.</p>
 				</description>
 			</topic>
@@ -807,10 +807,10 @@ The first group of options (<tt>option</tt>) controls the general options, while
 			<topic id="ReadReg">
 				<title>ReadReg</title>
 				<section title="Prototype">
-					<pre><line><b>any</b> ReadReg(<b>int</b> 1, <b>str</b> 2, <b>str</b>? 3, <b>any</b>? 4)</line></pre>
+					<pre><line><b>any</b> ReadReg(<b>int</b> RootKey, <b>str</b> SubKey, <b>str</b>? Name, <b>any</b>? Default)</line></pre>
 				</section>
 				<description>
-					<p>Reads the value of the specified key in the 32-bit or 64-bit system registry. First parameter is the root key, such as HKEY_LOCAL_MACHINE (32-bit) or HKEY_LOCAL_MACHINE_64 (64-bit). Constants for use with this parameter are declared in &builtins; accompanying ISPP. Second parameter specifies a subkey. Third parameter specifies the name of the value, if this parameter is omitted, a default value is assumed. Last optional parameter may be used to specify the default value that will be returned on failure.</p>
+					<p>Reads the value of the specified registry key. First parameter is the root key, such as HKEY_LOCAL_MACHINE, HKEY_LOCAL_MACHINE_32 or HKEY_LOCAL_MACHINE_64. Constants for use with this parameter are declared in &builtins; accompanying ISPP. Second parameter specifies a subkey. Third parameter specifies the name of the value, if this parameter is omitted, a default value is assumed. Last optional parameter may be used to specify the default value that will be returned on failure.</p>
 					<p>Note that this function can return a value of any type depending on the type of actual value in the registry.</p>
 				</description>
 			</topic>
@@ -860,19 +860,19 @@ The first group of options (<tt>option</tt>) controls the general options, while
 			<topic id="Pos">
 				<title>Pos</title>
 				<section title="Prototype">
-					<pre><line><b>int</b> Pos(<b>str</b> 1, <b>str</b> 2)</line></pre>
+					<pre><line><b>int</b> Pos(<b>str</b> SubStr, <b>str</b> S)</line></pre>
 				</section>
 				<description>
-					<p>Searches for a substring (first parameter) in another string (second parameter) and returns an integer value that is the 1-based index of the first character of the substring within the second string. <tt>Pos</tt> is case-sensitive. If the substring is not found, <tt>Pos</tt> returns zero.</p>
+					<p>Searches for SubStr within S and returns the first index of SubStr within S, 1-based. If SubStr is not found, <tt>Pos</tt> returns zero. The <tt>Pos</tt> function is case-sensitive.</p>
 				</description>
 			</topic>
 			<topic id="RPos">
 				<title>RPos</title>
 				<section title="Prototype">
-					<pre><line><b>int</b> RPos(<b>str</b> 1, <b>str</b> 2)</line></pre>
+					<pre><line><b>int</b> RPos(<b>str</b> SubStr, <b>str</b> S)</line></pre>
 				</section>
 				<description>
-					<p>Searches for a substring (first parameter) in another string (second parameter) and returns an integer value that is the 1-based index of the first character of the last occurrence of the substring within the second string. <tt>RPos</tt> is case-sensitive. If the substring is not found, <tt>RPos</tt> returns zero.</p>
+					<p>Searches for SubStr within S and returns the last index of SubStr within S, 1-based. If SubStr is not found, <tt>RPos</tt> returns zero. The <tt>RPos</tt> function is case-sensitive.</p>
 				</description>
 			</topic>
 			<topic id="Len">
@@ -892,19 +892,24 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				<description>
 					<p>Saves &curtrans; to the specified file.</p>
 				</description>
+				<section title="Example">
+					<pre>
+						<line>#expr SaveToFile(AddBackslash(SourcePath) + "Preprocessed.iss")</line>
+					</pre>
+				</section>
 			</topic>
 			<topic id="Find">
 				<title>Find</title>
 				<section title="Prototype">
-					<pre><line><b>int</b> Find(<b>int</b> 1, <b>str</b> 2, <b>int</b>? 3, <b>str</b>? 4, <b>int</b>? 5, <b>str</b>? 6, <b>int</b>? 7)</line></pre>
+					<pre><line><b>int</b> Find(<b>int</b> StartLine, <b>str</b> Str1, <b>int</b>? Flags1, <b>str</b>? Str2, <b>int</b>? Flags2, <b>str</b>? Str3, <b>int</b>? Flags3)</line></pre>
 				</section>
 				<description>
-					<p>Intended to be used with &insert; directive: returns the index of the line in the &translation; depending on specified criteria.</p>
-					<p>First parameter denotes the index of the line to start the search from, usually it is set to zero.</p>
-					<p>Second, fourth, and sixth parameters should specify string(s) to search within each line. Only the second parameter must be specified, whereas fourth and sixth may be omitted.</p>
-					<p>Third, fifth, and seventh parameters should specify the search flags for each string meaning that third parameter specifies flags for second, fifth for fourth, and seventh for sixth.</p>
-					<p>If any of the 'flags' parameters is omitted but the string parameter preceding it is specified, <tt>FIND_MATCH | FIND_AND</tt> (i. e. 0) is assumed.</p>
-					<p>Values for third, fifth, and seventh parameters of <tt>Find</tt> function are declared in &builtins;. See <link href="find-flags">Find flags</link> topic for the description of each value.</p>
+					<p>Intended to be used with &insert; directive: returns the 0-based index of the first line in the &translation; matching the specified criteria. Return less than 0 if not match was found.</p>
+					<p>First parameter denotes the 0-based index of the line to start the search from, usually it is set to zero.</p>
+					<p>Second, fourth, and sixth parameters should specify string(s) to search within each line. Only the first string must be specified, whereas the others may be omitted.</p>
+					<p>Third, fifth, and seventh parameters should specify the search flags for each string meaning that first flags parameter specifies flags for the first string, and so on.</p>
+					<p>See <link href="find-flags">Find flags</link> topic for the description of the available search flags.</p>
+					<p>If any of the 'flags' parameters is omitted but the string parameter preceding it is specified, <tt>FIND_MATCH | FIND_AND</tt> (i. e. 0) is used.</p>
 				</description>
 				<section title="See also">
 					<p>&insert;.</p>
@@ -919,12 +924,12 @@ The first group of options (<tt>option</tt>) controls the general options, while
 						<p><tt>FIND_CONTAINS</tt> (3) means that the line must contain (i. e. it also can match, begin, or end with) the search string.</p>
 						<p>Any of the following modifiers may be combined with one of the previous using bitwise OR operator (<tt>|</tt>):</p>
 						<p><tt>FIND_CASESENSITIVE</tt> (4) means that comparison must be case-sensitive.</p>
-						<p><tt>FIND_AND</tt> (0) means that this criterium (the pair of parameters in <tt>Find</tt> function) must be met as well as previous criteria.</p>
-						<p><tt>FIND_OR</tt> (8) means that it is allowed that this criterium is tested even if previous criteria were not met.</p>
+						<p><tt>FIND_AND</tt> (0) means that this criterium (the pair of parameters in <tt>Find</tt> function) must be met as well as previous criteria. Has no effect for the first criterium.</p>
+						<p><tt>FIND_OR</tt> (8) means that it is allowed that this criterium is tested even if previous criteria were not met. Has no effect for the first criterium.</p>
 						<p><tt>FIND_NOT</tt> (16) means that this criterium must not be met.</p>
 						<p><tt>FIND_AND</tt> and <tt>FIND_OR</tt> are mutually exclusive. If both are specified, <tt>FIND_OR</tt> takes precedence.</p>
 						<p>Special flags:</p>
-						<p><tt>FIND_TRIM</tt> (32) means that leading and trailing whitespaces must be stripped off from the line prior to testing it against all the criteria. This flag can only be used in the third parameter of the <tt>Find</tt> function. It is not mutually exclusive with any of the previously mentioned flags.</p>
+						<p><tt>FIND_TRIM</tt> (32) means that leading and trailing whitespaces must be stripped off from the line prior to testing it against all the criteria. This flag can only be used for the first criterium, and has no effect if used for the others. It is not mutually exclusive with any of the previously mentioned flags.</p>
 					</description>
 				</topic>
 			</topic>
@@ -955,6 +960,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				</section>
 				<description>
 					<p>Returns a string with the same text as the string passed in its parameter, but with all letters converted to lowercase. The conversion affects only 7-bit ASCII characters between 'A' and 'Z'.</p>
+					<p>Note: String comparison operators are case-insensitive, so calling LowerCase on strings before comparing is not necessary.</p>
 				</description>
 			</topic>
 			<topic id="UpperCase">
@@ -1041,7 +1047,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 						<line></line>
 						<line>#sub ProcessFoundFile</line>
 						<line>&dsp;#define FileName FindGetFileName(FindHandle)</line>
-						<line>&dsp;#if LowerCase(Copy(FileName, 1, 4)) == "ispp"</line>
+						<line>&dsp;#if Copy(FileName, 1, 4) == "ispp"</line>
 						<line>&dsp;&dsp;Source: {#FileName}; DestDir: {app}\ispp</line>
 						<line>&dsp;#else</line>
 						<line>&dsp;&dsp;Source: {#FileName}; DestDir: {app}</line>
@@ -1158,8 +1164,8 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					<pre><line><b>int</b> SaveStringToFile(<b>str</b> Filename, <b>str</b> S, <b>int</b>? Append, <b>int</b>? UTF8)</line></pre>
 				</section>
 				<description>
-          <p>Saves the specified string to the specified file. If Append is True or ommitted and the specified file already exists, it will be appended to instead of overwritten. If UTF8 is True or ommitted, the string will be saved with UTF8 encoding instead of ASCII encoding. Returns True if successful, or False otherwise.</p>
-          <p>This function does not automatically write a line break before or after the string. If Append is True or ommitted and the existing file did not end in a line break, the function will effectively append to the existing last line. To avoid this you can put line break characters (using <tt><link href="predefinedvars">NewLine</link></tt>) before and/or after your string.</p>
+          <p>Saves the specified string to the specified file. If Append is non-zero or ommitted and the specified file already exists, it will be appended to instead of overwritten. If UTF8 is non-zero or ommitted, the string will be saved with UTF8 encoding instead of ASCII encoding. Returns non-zero if successful, or zero otherwise.</p>
+          <p>This function does not automatically write a line break before or after the string. If Append is non-zero or ommitted and the existing file did not end in a line break, the function will effectively append to the existing last line. To avoid this you can put line break characters (using <tt><link href="predefinedvars">NewLine</link></tt>) before and/or after your string.</p>
 				</description>
 				<section title="Example">
 					<pre>
@@ -1170,11 +1176,11 @@ The first group of options (<tt>option</tt>) controls the general options, while
 			<topic id="GetDateTimeString">
 				<title>GetDateTimeString</title>
 				<section title="Prototype">
-					<pre><line><b>str</b> GetDateTimeString(<b>str</b>, <b>str</b>, <b>str</b>)</line></pre>
+					<pre><line><b>str</b> GetDateTimeString(<b>str</b> DateTimeFormat, <b>str</b>? DateSeparator, <b>str</b>? TimeSeparator)</line></pre>
 				</section>
 				<description>
 					<p>Returns the current date and time as a string using the specified formatting.</p>
-					<p>The first parameter is the format string. The second and third parameters denote the DateSeparator and TimeSeparator parameters explained below.</p>
+					<p>The first parameter is the format string. The second and third parameters are optional and denote the DateSeparator and TimeSeparator parameters explained below.</p>
 					<p>The following format specifiers are supported:</p>
 					<table>
 						<tr><td>d</td><td>Displays the day as a number without a leading zero (1-31).</td></tr>
@@ -1207,25 +1213,31 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				</description>
 				<section title="Example">
 					<pre>
-						<line>#define MyDateTimeString GetDateTimeString('ddddd', '', '')</line>
-						<line>#define MyDateTimeString GetDateTimeString('ddddd tt', '', '')</line>
+						<line>#define MyDateTimeString GetDateTimeString('ddddd')</line>
+						<line>#define MyDateTimeString GetDateTimeString('ddddd tt')</line>
 						<line>#define MyDateTimeString GetDateTimeString('dd/mm/yyyy hh:nn:ss', '-', ':')</line>
 					</pre>
+				</section>
+				<section title="See also">
+					<p><tt><link href="GetFileDateTimeString">GetFileDateTimeString</link></tt></p>
 				</section>
 			</topic>
 			<topic id="GetFileDateTimeString">
 				<title>GetFileDateTimeString</title>
 				<section title="Prototype">
-					<pre><line><b>str</b> GetFileDateTimeString(<b>str</b>, <b>str</b>, <b>str</b>, <b>str</b>)</line></pre>
+					<pre><line><b>str</b> GetFileDateTimeString(<b>str</b> Filename, <b>str</b> DateTimeFormat, <b>str</b>? DateSeparator, <b>str</b>? TimeSeparator)</line></pre>
 				</section>
 				<description>
 					<p>Returns the date and time of the specified file as a string using the specified formatting.</p>
-					<p>The first parameter is the file name. The second, third and fourth parameters denote the format string, DateSeparator and TimeSeparator parameters as explained in the <link href="GetDateTimeString">GetDateTimeString</link> topic.</p>
+					<p>The first parameter is the file name. The second parameter denotes the format string. The third and fourth parameters are optional and denote the DateSeparator and TimeSeparator parameters as explained in the <link href="GetDateTimeString">GetDateTimeString</link> topic.</p>
 				</description>
 				<section title="Example">
 					<pre>
 						<line>#define MyFileDateTimeString GetFileDateTimeString('myfile.txt', 'dd/mm/yyyy hh:nn:ss', '-', ':');</line>
 					</pre>
+				</section>
+				<section title="See also">
+					<p><tt><link href="GetDateTimeString">GetDateTimeString</link></tt></p>
 				</section>
 			</topic>
 			<topic id="GetMD5OfString">
@@ -1530,7 +1542,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Compares the packed versions Version1 and Version2 and returns True if they are equal.</p>
+					<p>Compares the packed versions Version1 and Version2 and returns non-zero if they are equal.</p>
 				</description>
 			</topic>
 			<topic id="UnpackVersionNumbers">
@@ -1625,7 +1637,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns the index of the line following the header of the section. This function is intended to be used with &insert; directive.</p>
+					<p>Returns the 0-based index of the line following the header of the section, or less than 0 if the section was not found. This function is intended to be used with &insert; directive.</p>
           <p>Declared in &builtins;.</p>
 				</description>
 			</topic>
@@ -1637,7 +1649,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns the index of the line following last entry of the section. This function is intended to be used with #insert directive.</p>
+					<p>Returns the 0-based index of the line following last entry of the section, or less than 0 if the section was not found. This function is intended to be used with #insert directive.</p>
           <p>Declared in &builtins;.</p>
 				</description>
 			</topic>
@@ -1649,7 +1661,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns the index of the line following either the [Code] section header, or the "program" keyword, if any.</p>
+					<p>Returns the 0-based index of the line following either the [Code] section header, or the "program" keyword, if any. Returns less than 0 if neither is found.</p>
           <p>Declared in &builtins;.</p>
 				</description>
 			</topic>
@@ -1787,7 +1799,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns nonzero value if given string is "yes", "true" or "1". Intended to be used with the <tt><link href="SetupSetting">SetupSetting</link></tt> function.</p>
+					<p>Returns non-zero if given string is "yes", "true" or "1". Intended to be used with the <tt><link href="SetupSetting">SetupSetting</link></tt> function.</p>
           <p>Declared in &builtins;.</p>
 				</description>
 			</topic>
@@ -1832,7 +1844,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns True if the given strings are identical, ignoring case.</p>
+					<p>Returns non-zero if the given strings are identical, ignoring case.</p>
           <p>Declared in &builtins;.</p>
 				</description>
 			</topic>
@@ -1844,8 +1856,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					</pre>
 				</section>
 				<description>
-					<p>Returns True if the given strings are identical, with case-sensitivity.</p>
-          <p>Declared in &builtins;.</p>
+					<p>Returns non-zero if the given strings are identical, with case-sensitivity.</p>
 				</description>
 			</topic>
 			<topic id="Message">
@@ -1891,6 +1902,35 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				<description>
 					<p>Adds a quote (&quot;) character to the left and right sides of the string if the string contains a space and it didn't have quotes already. This is primarily used when spawning another process with a long filename as one of the parameters.</p>
 				</description>
+			</topic>
+			<topic id="Is64BitPEImage">
+				<title>Is64BitPEImage</title>
+				<section title="Prototype">
+					<pre>
+						<line><b>int</b> Is64BitPEImage(<b>str</b> FileName)</line>
+					</pre>
+				</section>
+				<description>
+					<p>Returns non-zero if the specified file is a non-32-bit PE image, zero otherwise.</p>
+				</description>
+			</topic>
+			<topic id="EmitLanguagesSection">
+				<title>EmitLanguagesSection</title>
+				<section title="Prototype">
+					<pre>
+						<line><b>void</b> EmitLanguagesSection</line>
+					</pre>
+				</section>
+				<description>
+					<p>Emits a full <tt>[Languages]</tt> section for all available official languages, including English.</p>
+					<p>After compilation, see tab <i>Preprocessor Output</i> in the Compiler IDE for the full list of available languages, including their generated names.</p>
+					<p>Declared in &builtins;.</p>
+				</description>
+				<section title="Example">
+					<pre>
+						<line>#expr EmitLanguagesSection</line>
+					</pre>
+				</section>
 			</topic>
 		</topic>
     <topic id="macros">
@@ -1944,6 +1984,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 				<p>There are three types in ISPP: void, integer, and string. Variable of void type is declared by just specifying its name after &define; directive without any value. Such variables should be used with &ifdef; directive or <tt><link href="Defined">Defined</link></tt> function.</p>
 				<p>If "allow undeclared identifiers" parser option is off (the default state, see &pragma;), an error is raised when undefined variable is mentioned. Otherwise, it will be treated as a value of type void.</p>
 				<p>Void is compatible with integer and string in expressions. For example, you can use addition operator with void and integer operands, in this case void operand will be treated as zero. In conjunction with string, void operand is treated as an empty string.</p>
+				<p>String comparison operators are case-insensitive.</p>
 			</section>
 			<section title="Comments">
 				<p>Comments may be embedded in an expression by using a slash and an asterisk. For example:</p>
@@ -2033,10 +2074,10 @@ The first group of options (<tt>option</tt>) controls the general options, while
 					<tr><td><code>__FILENAME__</code></td><td><code><b>str</b></code>. Similar to __PATHFILENAME__, but returns only the filename portion.</td></tr>
 					<tr><td><code>__INCLUDE__</code></td><td><code><b>str</b></code>. Returns the current include path (or paths delimited with semicolons) set via <code>#pragma include</code>.</td></tr>
 					<tr><td><code>__LINE__</code></td><td><code><b>int</b></code>. Returns the number of the line in the current file.</td></tr>
-					<tr><td><code>__OPT_X__</code></td><td><code><b>void</b></code>. Defined if specified option set via <code>#pragma option -x+</code> is in effect. In place of "X" may be any letter from "A" to "Z." Use <link href="defined">Defined</link> function to test whether the variable is defined.</td></tr>
+					<tr><td><code>__OPT_X__</code></td><td><code><b>void</b></code>. Defined if specified option set via <code>#pragma option -x+</code> is in effect. In place of "X" may be any letter from "A" to "Z". Use <link href="defined">Defined</link> function to test whether the variable is defined.</td></tr>
 					<tr><td><code>__DIR__</code></td><td><code><b>str</b></code>. Similar to __PATHFILENAME__, but returns only the directory portion, excluding a trailing backslash (unless it is a root directory).</td></tr>
 					<tr><td><code>__PATHFILENAME__</code></td><td><code><b>str</b></code>. Returns the full path of the current include file. Empty string for the root script file.</td></tr>
-					<tr><td><code>__POPT_X__</code></td><td><code><b>void</b></code>. Defined if specified parser option set via <code>#pragma parseroption -x+</code> is in effect. In place of "X" may be any letter from "A" to "Z." Use <link href="defined">Defined</link> function to test whether the variable is defined.</td></tr>
+					<tr><td><code>__POPT_X__</code></td><td><code><b>void</b></code>. Defined if specified parser option set via <code>#pragma parseroption -x+</code> is in effect. In place of "X" may be any letter from "A" to "Z". Use <link href="defined">Defined</link> function to test whether the variable is defined.</td></tr>
 					<tr><td><code>__WIN32__</code></td><td><code><b>void</b></code>. Always defined.</td></tr>
 					<tr><td><code>ISPP_INVOKED</code></td><td><code><b>void</b></code>. Always defined.</td></tr>
 					<tr><td><code>ISCC_INVOKED</code></td><td><code><b>void</b></code>. Defined if compilation was invoked using the console-mode compiler, ISCC.exe.</td></tr>
@@ -2071,7 +2112,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
 			</keywords>
 			<title>Visibility of Identifiers</title>
 			<description header="no">
-				<p>Variables (as well as user defined functions, read "variable or user defined function" anywhere it says "variable" below) can be explicitly defined as "public," "protected," or "private." To define such a variable, its name in its &define; directive should be prepended with one of the visibility keywords:</p>
+				<p>Variables (as well as user defined functions, read "variable or user defined function" anywhere it says "variable" below) can be explicitly defined as "public", "protected", or "private". To define such a variable, its name in its &define; directive should be prepended with one of the visibility keywords:</p>
 				<pre>
 					<line>#define public MyVar 12</line>
 					<line>#define protected MyVar 13</line>
@@ -2143,7 +2184,7 @@ The first group of options (<tt>option</tt>) controls the general options, while
     <title>Looping</title>
     <description header="no">
       <p>ISPP allows you to call macro recursively, i. e. call it from itself. This feature can be used to emulate loop.</p>
-      <p>For example, you wish to construct a "for"-like loop. To achieve this, you'll need to declare a macro that takes one integer parameter and which makes the loop "body." After that you declare "outer" loop, which is used for iterating:</p>
+      <p>For example, you wish to construct a "for"-like loop. To achieve this, you'll need to declare a macro that takes one integer parameter and which makes the loop "body". After that you declare "outer" loop, which is used for iterating:</p>
       <pre> 
         <line>#define LoopBody(int I) Str(I) + "th iteration\n"</line>
         <line></line>
@@ -2172,3 +2213,4 @@ The first group of options (<tt>option</tt>) controls the general options, while
 </topic-->
 	</topic>
 </yasyx>
+

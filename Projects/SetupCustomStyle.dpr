@@ -19,6 +19,7 @@ uses
   RichEditViewer in '..\Components\RichEditViewer.pas',
   Shared.CommonFunc.Vcl in 'Src\Shared.CommonFunc.Vcl.pas',
   Shared.CommonFunc in 'Src\Shared.CommonFunc.pas',
+  Setup.Start in 'Src\Setup.Start.pas',
   Setup.MainForm in 'Src\Setup.MainForm.pas',
   Setup.MainFunc in 'Src\Setup.MainFunc.pas',
   Setup.Install in 'Src\Setup.Install.pas',
@@ -40,7 +41,7 @@ uses
   Shared.SetupTypes in 'Src\Shared.SetupTypes.pas',
   Shared.SetupSteps in 'Src\Shared.SetupSteps.pas',
   Setup.ScriptRunner in 'Src\Setup.ScriptRunner.pas',
-  Setup.ScriptDlg in 'Src\Setup.ScriptDlg.pas',
+  Setup.WizardForm.CustomPages in 'Src\Setup.WizardForm.CustomPages.pas',
   Setup.ScriptClasses in 'Src\Setup.ScriptClasses.pas',
   Setup.SelectLanguageForm in 'Src\Setup.SelectLanguageForm.pas' {SelectLanguageForm},
   Setup.FileExtractor in 'Src\Setup.FileExtractor.pas',
@@ -65,9 +66,9 @@ uses
   Setup.SetupForm in 'Src\Setup.SetupForm.pas',
   Setup.RegSvr in 'Src\Setup.RegSvr.pas',
   BrowseFunc in '..\Components\BrowseFunc.pas',
-  SetupLdrAndSetup.RedirFunc in 'Src\SetupLdrAndSetup.RedirFunc.pas',
+  Setup.PathRedir in 'Src\Setup.PathRedir.pas',
+  Setup.RedirFunc in 'Src\Setup.RedirFunc.pas',
   Setup.SecurityFunc in 'Src\Setup.SecurityFunc.pas',
-  Setup.Helper in 'Src\Setup.Helper.pas',
   Shared.VerInfoFunc in 'Src\Shared.VerInfoFunc.pas',
   Setup.RegDLL in 'Src\Setup.RegDLL.pas',
   Setup.SpawnCommon in 'Src\Setup.SpawnCommon.pas',
@@ -76,7 +77,7 @@ uses
   Shared.TaskDialogFunc in 'Src\Shared.TaskDialogFunc.pas',
   BidiUtils in '..\Components\BidiUtils.pas',
   PathFunc in '..\Components\PathFunc.pas',
-  BidiCtrls in '..\Components\BidiCtrls.pas',
+  NewCtrls in '..\Components\NewCtrls.pas',
   BitmapButton in '..\Components\BitmapButton.pas',
   BitmapImage in '..\Components\BitmapImage.pas',
   FolderTreeView in '..\Components\FolderTreeView.pas',
@@ -108,13 +109,35 @@ uses
   UnsignedFunc in '..\Components\UnsignedFunc.pas',
   Vcl.Themes,
   Vcl.Styles,
-  Setup.TaskDialogForm in 'Src\Setup.TaskDialogForm.pas' {TaskDialogForm};
+  Setup.TaskDialogForm in 'Src\Setup.TaskDialogForm.pas' {TaskDialogForm},
+  FormBackgroundStyleHook in '..\Components\FormBackgroundStyleHook.pas',
+  uPSDebugger in '..\Components\UniPs\Source\uPSDebugger.pas',
+  uPSR_classes in '..\Components\UniPs\Source\uPSR_classes.pas',
+  uPSR_comobj in '..\Components\UniPs\Source\uPSR_comobj.pas',
+  uPSR_controls in '..\Components\UniPs\Source\uPSR_controls.pas',
+  uPSR_dll in '..\Components\UniPs\Source\uPSR_dll.pas',
+  uPSR_extctrls in '..\Components\UniPs\Source\uPSR_extctrls.pas',
+  uPSR_forms in '..\Components\UniPs\Source\uPSR_forms.pas',
+  uPSR_graphics in '..\Components\UniPs\Source\uPSR_graphics.pas',
+  uPSR_std in '..\Components\UniPs\Source\uPSR_std.pas',
+  uPSR_stdctrls in '..\Components\UniPs\Source\uPSR_stdctrls.pas',
+  uPSRuntime in '..\Components\UniPs\Source\uPSRuntime.pas',
+  uPSUtils in '..\Components\UniPs\Source\uPSUtils.pas',
+  PathFuncTest in '..\Components\PathFuncTest.pas';
+
+{$R *.res}
 
 { The compiler may delete some of the resources included here }
 {$R Res\Setup.icon.dark.res}
 {$R Res\Setup.images.dark.res}
-{$R Res\Setup.extraimages.res}
-{$R Res\Setup.extraimages.dark.res}
-{$R Res\Setup.style.res}
 
-{$I Src\Setup.inc}
+{ Note: Setup.Start.pas includes more resources }
+
+begin
+  { This is a noop but makes the Delphi IDE show the Application->Appearance item in the
+    project options. Removing it also stops generation of the SetupCustomStyle.res file. }
+  if False then
+    Application.Title := 'Setup';
+
+  Start;
+end.

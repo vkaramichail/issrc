@@ -2,11 +2,11 @@ unit Shared.ScriptFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
-  Script support functions (listings - used by Compil32, ISCmplr, and Setup)
+  Script support functions (listings - used by ISIDE, ISCmplr, and Setup)
 }
 
 interface
@@ -15,7 +15,7 @@ type
   TScriptFuncTableID = (sftScriptDlg, sftNewDiskForm, sftBrowseFunc, sftCommonFuncVcl,
     sftCommonFunc, sftInstall, sftInstFunc, sftInstFuncOle, sftMainFunc, sftMessages,
     sftSystem, sftSysUtils, sftVerInfoFunc, sftWindows, sftActiveX, sftLoggingFunc,
-    sftOther);
+    sftPathFunc, sftOther);
   TScriptTable = array of AnsiString;
 
 var
@@ -32,9 +32,9 @@ var
     'procedure GetWindowsVersionEx(var Version: TWindowsVersion);'
   ];
 
-{$IFDEF COMPIL32PROJ}
+{$IFDEF ISIDEPROJ}
 
-  { These are just for Compil32 and should not be used by ISCmplr or Setup because
+  { These are just for ISIDE and should not be used by ISCmplr or Setup because
     they're already registered by TPSPascalCompiler.DefineStandardProcedures and
     TPSExec.RegisterStandardProc and RegisterDll_Compiletime and RegisterDLLRuntimeEx }
   ROPSScriptFuncTable: TScriptTable =
@@ -49,10 +49,10 @@ var
     'function Copy(S: AnyString; Index, Count: Integer): String;',
     'function Length(S: AnyString): LongInt;',
     'procedure SetLength(var S: AnyString; L: LongInt);',
-    'function Lowercase(S: AnyString): String;',
-    'function Uppercase(S: AnyString): String;',
-    'function AnsiLowercase(S: AnyString): String;',
-    'function AnsiUppercase(S: AnyString): String;',
+    'function LowerCase(S: AnyString): String;',
+    'function UpperCase(S: AnyString): String;',
+    'function AnsiLowerCase(S: AnyString): String;',
+    'function AnsiUpperCase(S: AnyString): String;',
     'function StringOfChar(C: Char; I : LongInt): String;',
     'procedure Delete(var S: AnyString; Index, Count: Integer);',
     'procedure Insert(Source: AnyString; var Dest: AnyString; Index: Integer);',
@@ -71,6 +71,7 @@ var
     'function IDispatchInvoke(Self: IDispatch; PropertySet: Boolean; const Name: String; Par: array of Variant): Variant;',
     'procedure UnloadDll(S: String);',
     'function DllGetLastError: LongInt;',
+    'function Int(E: Extended): Extended;',
     { Special functions: undocumented but listing anyway }
     'function Low(var X): Int64;',
     'function High(var X): Int64;',
@@ -80,8 +81,8 @@ var
     'procedure Exclude(var S: Set; I: Ordinal);',
     'function SizeOf(var X): LongInt;',
     { Special: keywords instead of functions in ROPS but are presented and documented as functions by us }
-    'function Chr(B: Byte): Char;',
-    'function Ord(C: Char): Byte;',
+    'function Chr(X: Word): Char;',
+    'function Ord(X: Ordinal): UInt64;',
     'procedure Exit;'
   ];
 
@@ -95,8 +96,6 @@ var
     'function Sin(E: Extended): Extended;',
     'function Cos(E: Extended): Extended;',
     'function Sqrt(E: Extended): Extended;',
-    'function Round(E: Extended): LongInt;',
-    'function Trunc(E: Extended): LongInt;',
     'function Int(E: Extended): Extended;',
     'function Pi: Extended;',
     'function Abs(E: Extended): Extended;',
@@ -116,9 +115,12 @@ var
 
 {$ENDIF}
 
+type
+  TScriptFuncHeaderKind = (hkFunction, hkProcedure, hkConstructor);
+
 function ScriptFuncHasParameters(const ScriptFunc: AnsiString): Boolean;
 function RemoveScriptFuncHeader(const ScriptFunc: AnsiString): AnsiString; overload;
-function RemoveScriptFuncHeader(const ScriptFunc: AnsiString; out WasFunction: Boolean): AnsiString; overload;
+function RemoveScriptFuncHeader(const ScriptFunc: AnsiString; out Kind: TScriptFuncHeaderKind): AnsiString; overload;
 function ExtractScriptFuncWithoutHeaderName(const ScriptFuncWithoutHeader: AnsiString): AnsiString;
 function ExtractScriptFuncName(const ScriptFunc: AnsiString): AnsiString;
 
@@ -136,24 +138,28 @@ end;
 
 function RemoveScriptFuncHeader(const ScriptFunc: AnsiString): AnsiString;
 begin
-  var Dummy: Boolean;
+  var Dummy: TScriptFuncHeaderKind;
   Result := RemoveScriptFuncHeader(ScriptFunc, Dummy);
 end;
 
-function RemoveScriptFuncHeader(const ScriptFunc: AnsiString; out WasFunction: Boolean): AnsiString;
+function RemoveScriptFuncHeader(const ScriptFunc: AnsiString; out Kind: TScriptFuncHeaderKind): AnsiString;
 begin
   Result := ScriptFunc;
 
   const H1: AnsiString = 'function ';
   const H2: AnsiString = 'procedure ';
+  const H3: AnsiString = 'constructor ';
 
-  WasFunction := CompareText(Copy(Result, 1, Length(H1)), H1) = 0;
-
-  if WasFunction then
+  if SameText(Copy(Result, 1, Length(H1)), H1) then begin
+    Kind := hkFunction;
     Delete(Result, 1, Length(H1))
-  else if CompareText(Copy(Result, 1, Length(H2)), H2) = 0 then
+  end else if SameText(Copy(Result, 1, Length(H2)), H2) then begin
+    Kind := hkProcedure;
     Delete(Result, 1, Length(H2))
-  else
+  end else if SameText(Copy(Result, 1, Length(H3)), H3) then begin
+    Kind := hkConstructor;
+    Delete(Result, 1, Length(H3))
+  end else
     raise Exception.CreateFmt('Invalid ScriptFunc: %s', [Result]);
 end;
 
@@ -182,7 +188,7 @@ begin
   Result := ExtractScriptFuncWithoutHeaderName(RemoveScriptFuncHeader(ScriptFunc));
 end;
 
-{$IFDEF COMPIL32PROJ}
+{$IFDEF ISIDEPROJ}
 {$IFDEF DEBUG}
 function IsCleanScriptFunc(const ScriptFunc: AnsiString): Boolean;
 begin
@@ -211,7 +217,7 @@ initialization
   ScriptFuncTables[sftScriptDlg] :=
   [
     'function PageFromID(const ID: Integer): TWizardPage;',
-    'function PageIndexFromID(const ID: Integer): Integer;',
+    'function PageIndexFromID(const ID: Integer): NativeInt;',
     'function CreateCustomPage(const AfterID: Integer; const ACaption, ADescription: String): TWizardPage;',
     'function CreateInputQueryPage(const AfterID: Integer; const ACaption, ADescription, ASubCaption: String): TInputQueryWizardPage;',
     'function CreateInputOptionPage(const AfterID: Integer; const ACaption, ADescription, ASubCaption: String; Exclusive, ListBox: Boolean): TInputOptionWizardPage;',
@@ -225,7 +231,7 @@ initialization
     'function CreateExtractionPage(const ACaption, ADescription: String; const OnExtractionProgress: TOnExtractionProgress): TExtractionWizardPage;',
     'function ScaleX(X: Integer): Integer;',
     'function ScaleY(Y: Integer): Integer;',
-    'function CreateCustomForm: TSetupForm;'
+    'function CreateCustomForm(const ClientWidth, ClientHeight: Integer; const KeepSizeX, KeepSizeY: Boolean): TSetupForm;'
   ];
 
   ScriptFuncTables[sftNewDiskForm] :=
@@ -265,9 +271,6 @@ initialization
     'function GetCmdTail: String;',
     'function ParamCount: Integer;',
     'function ParamStr(Index: Integer): String;',
-    'function AddBackslash(const S: String): String;',
-    'function RemoveBackslash(const S: String): String;',
-    'function RemoveBackslashUnlessRoot(const S: String): String;',
     'function AddQuotes(const S: String): String;',
     'function RemoveQuotes(const S: String): String;',
     'function GetShortName(const LongName: String): String;',
@@ -282,23 +285,23 @@ initialization
     'function CopyFile(const ExistingFile, NewFile: String; const FailIfExists: Boolean): Boolean;',
     'function FileCopy(const ExistingFile, NewFile: String; const FailIfExists: Boolean): Boolean;', { old name of CopyFile }
     'function ConvertPercentStr(var S: String): Boolean;',
-    'function RegValueExists(const RootKey: Integer; const SubKeyName, ValueName: String): Boolean;',
-    'function RegQueryStringValue(const RootKey: Integer; const SubKeyName, ValueName: String; var ResultStr: String): Boolean;',
-    'function RegQueryMultiStringValue(const RootKey: Integer; const SubKeyName, ValueName: String; var ResultStr: String): Boolean;',
-    'function RegDeleteKeyIncludingSubkeys(const RootKey: Integer; const SubkeyName: String): Boolean;',
-    'function RegDeleteKeyIfEmpty(const RootKey: Integer; const SubkeyName: String): Boolean;',
-    //not really in CommonFunc
-    'function RegKeyExists(const RootKey: Integer; const SubKeyName: String): Boolean;',
-    'function RegDeleteValue(const RootKey: Integer; const SubKeyName, ValueName: String): Boolean;',
-    'function RegGetSubkeyNames(const RootKey: Integer; const SubKeyName: String; var Names: TArrayOfString): Boolean;',
-    'function RegGetValueNames(const RootKey: Integer; const SubKeyName: String; var Names: TArrayOfString): Boolean;',
-    'function RegQueryDWordValue(const RootKey: Integer; const SubKeyName, ValueName: String; var ResultDWord: Cardinal): Boolean;',
-    'function RegQueryBinaryValue(const RootKey: Integer; const SubKeyName, ValueName: String; var ResultStr: AnsiString): Boolean;',
-    'function RegWriteStringValue(const RootKey: Integer; const SubKeyName, ValueName, Data: String): Boolean;',
-    'function RegWriteExpandStringValue(const RootKey: Integer; const SubKeyName, ValueName, Data: String): Boolean;',
-    'function RegWriteMultiStringValue(const RootKey: Integer; const SubKeyName, ValueName, Data: String): Boolean;',
-    'function RegWriteDWordValue(const RootKey: Integer; const SubKeyName, ValueName: String; const Data: Cardinal): Boolean;',
-    'function RegWriteBinaryValue(const RootKey: Integer; const SubKeyName, ValueName: String; const Data: AnsiString): Boolean;',
+    'function RegValueExists(const RootKey: HKEY; const SubKeyName, ValueName: String): Boolean;',
+    'function RegQueryStringValue(const RootKey: HKEY; const SubKeyName, ValueName: String; var ResultStr: String): Boolean;',
+    'function RegQueryMultiStringValue(const RootKey: HKEY; const SubKeyName, ValueName: String; var ResultStr: String): Boolean;',
+    'function RegDeleteKeyIncludingSubkeys(const RootKey: HKEY; const SubkeyName: String): Boolean;',
+    'function RegDeleteKeyIfEmpty(const RootKey: HKEY; const SubkeyName: String): Boolean;',
+    { Not really in CommonFunc }
+    'function RegKeyExists(const RootKey: HKEY; const SubKeyName: String): Boolean;',
+    'function RegDeleteValue(const RootKey: HKEY; const SubKeyName, ValueName: String): Boolean;',
+    'function RegGetSubkeyNames(const RootKey: HKEY; const SubKeyName: String; var Names: TArrayOfString): Boolean;',
+    'function RegGetValueNames(const RootKey: HKEY; const SubKeyName: String; var Names: TArrayOfString): Boolean;',
+    'function RegQueryDWordValue(const RootKey: HKEY; const SubKeyName, ValueName: String; var ResultDWord: Cardinal): Boolean;',
+    'function RegQueryBinaryValue(const RootKey: HKEY; const SubKeyName, ValueName: String; var ResultStr: AnsiString): Boolean;',
+    'function RegWriteStringValue(const RootKey: HKEY; const SubKeyName, ValueName, Data: String): Boolean;',
+    'function RegWriteExpandStringValue(const RootKey: HKEY; const SubKeyName, ValueName, Data: String): Boolean;',
+    'function RegWriteMultiStringValue(const RootKey: HKEY; const SubKeyName, ValueName, Data: String): Boolean;',
+    'function RegWriteDWordValue(const RootKey: HKEY; const SubKeyName, ValueName: String; const Data: Cardinal): Boolean;',
+    'function RegWriteBinaryValue(const RootKey: HKEY; const SubKeyName, ValueName: String; const Data: AnsiString): Boolean;',
     //
     'function IsAdmin: Boolean;',
     'function IsAdminLoggedOn: Boolean;', { old name of IsAdmin }
@@ -307,11 +310,35 @@ initialization
     'function FontExists(const FaceName: String): Boolean;',
     'function GetUILanguage: Integer;',
     'function AddPeriod(const S: String): String;',
-    'function CharLength(const S: String; const Index: Integer): Integer;',
     'function SetNTFSCompression(const FileOrDir: String; Compress: Boolean): Boolean;',
     'function IsWildcard(const Pattern: String): Boolean;',
     'function WildcardMatch(const Text, Pattern: String): Boolean;',
     'function HighContrastActive: Boolean;'
+  ];
+
+  ScriptFuncTables[sftPathFunc] :=
+  [
+    'function AddBackslash(const S: String): String;',
+    'function RemoveBackslash(const S: String): String;',
+    'function RemoveBackslashUnlessRoot(const S: String): String;',
+    'function PathCombine(const Dir, Filename: String): String;',
+    'function PathHasInvalidCharacters(const S: String; const AllowDriveLetterColon: Boolean): Boolean;',
+    'function PathIsRooted(const Filename: String): Boolean;',
+    'function PathNormalizeSlashes(const S: String): String;',
+    'function PathSame(const S1, S2: String): Boolean;',
+    'function PathStartsWith(const S, AStartsWith: String; const IgnoreCase: Boolean): Boolean;',
+    'function PathEndsWith(const S, AEndsWith: String; const IgnoreCase: Boolean): Boolean;',
+    'function PathConvertNormalToSuper(const Filename: String; out SuperFilename: String; const Expand: Boolean): Boolean;',
+    'function PathConvertSuperToNormal(const Filename: String): String;',
+    { All in PathFunc but with a different name }
+    'function CharLength(const S: String; const Index: Integer): Integer;',
+    'function ExpandFileName(const FileName: String): String;',
+    'function ExtractFileDir(const FileName: String): String;',
+    'function ExtractFileDrive(const FileName: String): String;',
+    'function ExtractFileExt(const FileName: String): String;',
+    'function ExtractFileName(const FileName: String): String;',
+    'function ExtractFilePath(const FileName: String): String;',
+    'function ChangeFileExt(const FileName, Extension: String): String;'
   ];
 
   ScriptFuncTables[sftInstall] :=
@@ -351,8 +378,11 @@ initialization
     //function GrantPermissionOnKey(const RootKey: HKEY; const Subkey: String; const Entries: TGrantPermissionEntry; const EntryCount: Integer): Boolean;
     'procedure IncrementSharedCount(const Is64Bit: Boolean; const Filename: String; const AlreadyExisted: Boolean);',
     'function Exec(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer): Boolean;',
+    'function ExecWithNativeSysDir(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer): Boolean;',
     'function ExecAndCaptureOutput(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer; var Output: TExecOutput): Boolean;',
+    'function ExecAndCaptureOutputWithNativeSysDir(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer; var Output: TExecOutput): Boolean;',
     'function ExecAndLogOutput(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer; const OnLog: TOnLog): Boolean;',
+    'function ExecAndLogOutputWithNativeSysDir(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer; const OnLog: TOnLog): Boolean;',
     'function ExecAsOriginalUser(const Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ResultCode: Integer): Boolean;',
     'function ShellExec(const Verb, Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ErrorCode: Integer): Boolean;',
     'function ShellExecAsOriginalUser(const Verb, Filename, Params, WorkingDir: String; const ShowCmd: Integer; const Wait: TExecWait; var ErrorCode: Integer): Boolean;',
@@ -403,10 +433,11 @@ initialization
     'function IsX86: Boolean;',
     'function IsX86OS: Boolean;',
     'function IsX86Compatible: Boolean;',
+    'function IsCurrentProcess64Bit: Boolean;',
     'function CustomMessage(const MsgName: String): String;',
     'function RmSessionStarted: Boolean;',
-    'function RegisterExtraCloseApplicationsResource(const DisableFsRedir: Boolean; const AFilename: String): Boolean;',
-    { Actually access WizardForm.pas }
+    'function RegisterExtraCloseApplicationsResource(const AFilename: String): Boolean;',
+    { Actually in Setup.WizardForm }
     'function GetWizardForm: TWizardForm;',
     'function WizardIsComponentSelected(const Components: String): Boolean;',
     'function IsComponentSelected(const Components: String): Boolean;', { old name of WizardIsComponentSelected }
@@ -437,15 +468,7 @@ initialization
     'function TrimRight(const S: String): String;',
     'function GetCurrentDir: String;',
     'function SetCurrentDir(const Dir: String): Boolean;',
-    'function ExpandFileName(const FileName: String): String;',
     'function ExpandUNCFileName(const FileName: String): String;',
-    'function ExtractRelativePath(const BaseName, DestName: String): String;',
-    'function ExtractFileDir(const FileName: String): String;',
-    'function ExtractFileDrive(const FileName: String): String;',
-    'function ExtractFileExt(const FileName: String): String;',
-    'function ExtractFileName(const FileName: String): String;',
-    'function ExtractFilePath(const FileName: String): String;',
-    'function ChangeFileExt(const FileName, Extension: String): String;',
     'function FileSearch(const Name, DirList: String): String;',
     'function RenameFile(const OldName, NewName: String): Boolean;',
     'function DeleteFile(const FileName: String): Boolean;',
@@ -456,7 +479,9 @@ initialization
     'function SameStr(const S1, S2: String): Boolean;',
     'function SameText(const S1, S2: String): Boolean;',
     'function GetDateTimeString(const DateTimeFormat: String; const DateSeparator, TimeSeparator: Char): String;',
-    'function SysErrorMessage(ErrorCode: Integer): String;'
+    'function SysErrorMessage(ErrorCode: Cardinal): String;',
+    { Actually NewExtractRelativePath, and not from SysUtils }
+    'function ExtractRelativePath(const BaseName, DestName: String): String;'
   ];
 
   ScriptFuncTables[sftVerInfoFunc] :=
@@ -477,19 +502,19 @@ initialization
 
   ScriptFuncTables[sftWindows] :=
   [
-    'procedure Sleep(const Milliseconds: LongInt);',
+    'procedure Sleep(const Milliseconds: Cardinal);',
     'function FindWindowByClassName(const ClassName: String): HWND;',
     'function FindWindowByWindowName(const WindowName: String): HWND;',
-    'function SendMessage(const Wnd: HWND; const Msg, WParam, LParam: LongInt): LongInt;',
-    'function PostMessage(const Wnd: HWND; const Msg, WParam, LParam: LongInt): Boolean;',
-    'function SendNotifyMessage(const Wnd: HWND; const Msg, WParam, LParam: LongInt): Boolean;',
-    'function RegisterWindowMessage(const Name: String): LongInt;',
-    'function SendBroadcastMessage(const Msg, WParam, LParam: LongInt): LongInt;',
-    'function PostBroadcastMessage(const Msg, WParam, LParam: LongInt): Boolean;',
-    'function SendBroadcastNotifyMessage(const Msg, WParam, LParam: LongInt): Boolean;',
-    'function LoadDLL(const DLLName: String; var ErrorCode: Integer): LongInt;',
-    'function CallDLLProc(const DLLHandle: LongInt; const ProcName: String; const Param1, Param2: LongInt; var Result: LongInt): Boolean;',
-    'function FreeDLL(const DLLHandle: LongInt): Boolean;',
+    'function SendMessage(const Wnd: HWND; const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): LRESULT;',
+    'function PostMessage(const Wnd: HWND; const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): Boolean;',
+    'function SendNotifyMessage(const Wnd: HWND; const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): Boolean;',
+    'function RegisterWindowMessage(const Name: String): Cardinal;',
+    'function SendBroadcastMessage(const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): LRESULT;',
+    'function PostBroadcastMessage(const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): Boolean;',
+    'function SendBroadcastNotifyMessage(const Msg: Cardinal; const WParam: WPARAM; const LParam: LPARAM): Boolean;',
+    'function LoadDLL(const DLLName: String; var ErrorCode: Integer): HMODULE;',
+    'function CallDLLProc(const DLLHandle: HMODULE; const ProcName: String; const Param1, Param2: NativeInt; var Result: NativeInt): Boolean;',
+    'function FreeDLL(const DLLHandle: HMODULE): Boolean;',
     'procedure CreateMutex(const Name: String);',
     'procedure OemToCharBuff(var S: AnsiString);',
     'procedure CharToOemBuff(var S: AnsiString);'
@@ -516,6 +541,7 @@ initialization
     'function WizardSelectedTasks(const Descriptions: Boolean): String;',
     'procedure WizardSelectComponents(const Components: String);',
     'procedure WizardSelectTasks(const Tasks: String);',
+    'procedure WizardSetBackImage(const BackImages: TArrayOfGraphic; const Stretch, Center: Boolean; const Opacity: Byte);',
     'function WizardSilent: Boolean;',
     'function IsUninstaller: Boolean;',
     'function UninstallSilent: Boolean;',
@@ -538,13 +564,14 @@ initialization
     'function SaveStringsToFile(const FileName: String; const S: TArrayOfString; const Append: Boolean): Boolean;',
     'function SaveStringsToUTF8File(const FileName: String; const S: TArrayOfString; const Append: Boolean): Boolean;',
     'function SaveStringsToUTF8FileWithoutBOM(const FileName: String; const S: TArrayOfString; const Append: Boolean): Boolean;',
-    'function EnableFsRedirection(const Enable: Boolean): Boolean;',
     'function GetUninstallProgressForm: TUninstallProgressForm;',
-    'function CreateCallback(Method: AnyMethod): Longword;',
+    'function CreateCallback(Method: AnyMethod): NativeInt;',
     'function IsDotNetInstalled(const MinVersion: TDotNetVersion; const MinServicePack: Cardinal): Boolean;',
     'function IsMsiProductInstalled(const UpgradeCode: String; const PackedMinVersion: Int64): Boolean;',
     'function InitializeBitmapButtonFromIcon(const BitmapButton: TBitmapButton; const IconFilename: String; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;',
     'function InitializeBitmapImageFromIcon(const BitmapImage: TBitmapImage; const IconFilename: String; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;',
+    'function InitializeBitmapButtonFromStockIcon(const BitmapButton: TBitmapButton; const Siid: Integer; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;',
+    'function InitializeBitmapImageFromStockIcon(const BitmapImage: TBitmapImage; const Siid: Integer; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;',
     'procedure Extract7ZipArchive(const ArchiveFileName, DestDir: String; const FullPaths: Boolean; const OnExtractionProgress: TOnExtractionProgress);',
     'procedure ExtractArchive(const ArchiveFilename, DestDir, Password: String; const FullPaths: Boolean; const OnExtractionProgress: TOnExtractionProgress);',
     'procedure MapArchiveExtensions(const DestExt, SourceExt: String);',
@@ -552,10 +579,17 @@ initialization
     'function StringJoin(const Separator: String; const Values: TArrayOfString): String;',
     'function StringSplit(const S: String; const Separators: TArrayOfString; const Typ: TSplitType): TArrayOfString;',
     'function StringSplitEx(const S: String; const Separators: TArrayOfString; const Quote: Char; const Typ: TSplitType): TArrayOfString;',
-    'function ISSigVerify(const AllowedKeysRuntimeIDs: TStringList; const Filename: String; const VerifyFilename: Boolean; const KeepOpen: Boolean): TFileStream;'
+    'function ISSigVerify(const AllowedKeysRuntimeIDs: TStringList; const Filename: String; const VerifyFilename: Boolean; const KeepOpen: Boolean): TFileStream;',
+    'function Round(const E: Extended): Int64;',
+    'function Trunc(const E: Extended): Int64;',
+    'function MulDiv(const Number, Numerator, Denominator: Integer): Integer;',
+    'function StrToColor(const S: String): TColor;',
+    'function RPos(const SubStr, S: String): Integer;',
+    'function ApplyPathRedirRulesForCurrentProcess(const A64Bit: Boolean; const APath: String): String;',
+    'function ApplyPathRedirRules(const A64Bit: Boolean; const APath: String; const ATargetProcess64Bit: Boolean): String;'
   ];
 
-  {$IFDEF COMPIL32PROJ}
+  {$IFDEF ISIDEPROJ}
   {$IFDEF DEBUG}
   for var ScriptFuncTable in ScriptFuncTables do
     CheckIsCleanScriptFuncTable(ScriptFuncTable);

@@ -20,7 +20,7 @@ unit BitmapButton;
 interface
 
 uses
-  Windows, Messages, Controls, Graphics, Classes, Imaging.pngimage,
+  Windows, Messages, ShellAPI, Controls, Graphics, Classes, Imaging.pngimage,
   BitmapImage;
 
 type
@@ -32,6 +32,7 @@ type
     procedure SetBitmap(Value: TBitmap);
     procedure SetCenter(Value: Boolean);
     procedure SetGraphic(Value: TGraphic);
+    procedure SetOpacity(Value: Byte);
     procedure SetPngImage(Value: TPngImage);
     procedure SetReplaceColor(Value: TColor);
     procedure SetReplaceWithColor(Value: TColor);
@@ -48,6 +49,7 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     function InitializeFromIcon(const Instance: HINST; const Name: PChar; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+    function InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
     property Bitmap: TBitmap read FImpl.Bitmap write SetBitmap;
     property Graphic: TGraphic write SetGraphic;
   published
@@ -58,6 +60,7 @@ type
     property Caption;
     property Center: Boolean read FImpl.Center write SetCenter default True;
     property Enabled;
+    property Opacity: Byte read FImpl.Opacity write SetOpacity default 255;
     property ParentShowHint;
     property PngImage: TPngImage read FImpl.PngImage write SetPngImage;
     property PopupMenu;
@@ -114,6 +117,11 @@ begin
   Result := FImpl.InitializeFromIcon(HInstance, Name, BkColor, AscendingTrySizes);
 end;
 
+function TBitmapButton.InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+begin
+  Result := FImpl.InitializeFromStockIcon(siid, BkColor, AscendingTrySizes);
+end;
+
 procedure TBitmapButton.SetAutoSize(Value: Boolean);
 begin
   FImpl.SetAutoSize(Self, Value);
@@ -137,6 +145,11 @@ end;
 procedure TBitmapButton.SetGraphic(Value: TGraphic);
 begin
   FImpl.SetGraphic(Value);
+end;
+
+procedure TBitmapButton.SetOpacity(Value: Byte);
+begin
+  FImpl.SetOpacity(Self, Value);
 end;
 
 procedure TBitmapButton.SetPngImage(Value: TPngImage);

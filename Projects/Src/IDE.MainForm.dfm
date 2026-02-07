@@ -588,10 +588,14 @@ object MainForm: TMainForm
         Caption = '&Unfold Section'
         OnClick = EFoldOrUnfoldLineClick
       end
-      object EGoto: TMenuItem
+      object EGotoFile: TMenuItem
+        Caption = 'Go to File...'
+        OnClick = EGotoFileClick
+      end
+      object EGotoLine: TMenuItem
         Caption = '&Go to Line...'
         ShortCut = 16455
-        OnClick = EGotoClick
+        OnClick = EGotoLineClick
       end
       object N18: TMenuItem
         Caption = '-'
@@ -844,7 +848,7 @@ object MainForm: TMainForm
         Caption = 'Target &Uninstall'
         GroupIndex = 1
         RadioItem = True
-        ShortCut = 16471
+        ShortCut = 32849
         OnClick = RTargetClick
       end
     end
@@ -978,10 +982,10 @@ object MainForm: TMainForm
     Left = 160
     Top = 120
   end
-  object CheckIfRunningTimer: TTimer
+  object CheckIfTerminatedTimer: TTimer
     Enabled = False
     Interval = 100
-    OnTimer = CheckIfRunningTimerTimer
+    OnTimer = CheckIfTerminatedTimerTimer
     Left = 160
     Top = 64
   end

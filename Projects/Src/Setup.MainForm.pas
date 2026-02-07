@@ -2,7 +2,7 @@ unit Setup.MainForm;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 }
@@ -25,7 +25,7 @@ type
     function Install: Boolean;
     procedure SetStep(const AStep: TSetupStep; const HandleExceptions: Boolean);
     class procedure ShowException(Sender: TObject; E: Exception);
-    class procedure ShowExceptionMsg(const S: String);
+    class procedure ShowExceptionMsg(const S: String); static;
   end;
 
 var
@@ -105,7 +105,6 @@ function TMainForm.Install: Boolean;
     CheckIfRestartNeeded: Boolean;
     ChecksumBefore, ChecksumAfter: TSHA256Digest;
     WindowDisabler: TWindowDisabler;
-    I: Integer;
     RunEntry: PSetupRunEntry;
   begin
     if Entries[seRun].Count <> 0 then begin
@@ -116,7 +115,7 @@ function TMainForm.Install: Boolean;
       var WizardWasHidden := False;
       WindowDisabler := nil;
       try
-        for I := 0 to Entries[seRun].Count-1 do begin
+        for var I := 0 to Entries[seRun].Count-1 do begin
           RunEntry := PSetupRunEntry(Entries[seRun][I]);
           if not(roPostInstall in RunEntry.Options) and
              ShouldProcessRunEntry(WizardComponents, WizardTasks, RunEntry) then begin

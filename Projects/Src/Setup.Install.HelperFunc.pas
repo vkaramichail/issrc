@@ -2,13 +2,13 @@ unit Setup.Install.HelperFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
   Installation helper functions which don't need install state such as UninstLog and RegisterFileList
 
-  Only to be called by Setup.Install: if you want to reuse any of these functione from another unit
+  Only to be called by Setup.Install: if you want to reuse any of these functions from another unit
   you should move the function so somewhere else, like Setup.InstFunc
 }
 
@@ -28,8 +28,8 @@ type
 procedure SetFilenameLabelText(const S: String; const CallUpdate: Boolean);
 procedure SetStatusLabelText(const S: String;
   const ClearFilenameLabelText: Boolean = True);
-procedure InstallMessageBoxCallback(const Flags: LongInt; const After: Boolean;
-  const Param: LongInt);
+procedure InstallMessageBoxCallback(const Flags: Cardinal; const After: Boolean;
+  const Param: NativeInt);
 procedure CalcFilesSize(var InstallFilesSize, AfterInstallFilesSize: Int64);
 procedure InitProgressGauge(const InstallFilesSize: Int64);
 procedure UpdateProgressGauge;
@@ -44,17 +44,16 @@ procedure JustProcessEventsProc64(const Bytes, Param: Int64);
 function AbortRetryIgnoreTaskDialogMsgBox(const Text: String;
   const RetryIgnoreAbortButtonLabels: array of String): Boolean;
 function FileTimeToStr(const AFileTime: TFileTime): String;
-function TryToGetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String;
-  var Sum: TSHA256Digest): Boolean;
+function TryToGetSHA256OfFile(const Filename: String; var Sum: TSHA256Digest): Boolean;
 procedure CopySourceFileToDestFile(const SourceF, DestF: TFile;
   [ref] const Verification: TSetupFileVerification; const ISSigSourceFilename: String;
   const AExpectedSize: Int64);
-function ShortenOrExpandFontFilename(const Filename: String): String;
+function ShortenFontFilename(const Filename: String): String;
 function GetLocalTimeAsStr: String;
 procedure PackCustomMessagesIntoString(var S: String);
 function PackCompiledCodeTextIntoString(const CompiledCodeText: AnsiString): String;
 procedure RegError(const Func: TRegErrorFunc; const RootKey: HKEY;
-  const KeyName: String; const ErrorCode: Longint);
+  const KeyName: String; const ErrorCode: DWORD);
 procedure WriteMsgData(const F: TFile);
 procedure MarkExeHeader(const F: TFile; const ModeID: Longint);
 procedure ProcessInstallDeleteEntries;
@@ -67,11 +66,11 @@ implementation
 
 uses
   Classes, SysUtils, Forms,
-  NewProgressBar, PathFunc, RestartManager, TaskbarProgressFunc,
+  NewProgressBar, PathFunc, RestartManager, TaskbarProgressFunc, UnsignedFunc,
   Shared.CommonFunc, Shared.CommonFunc.Vcl, Shared.SetupMessageIDs, Shared.SetupTypes,
   SetupLdrAndSetup.Messages,
   Setup.InstFunc, Setup.ISSigVerifyFunc, Setup.LoggingFunc, Setup.MainFunc, Setup.ScriptRunner,
-  Setup.WizardForm;
+  Setup.WizardForm, Setup.PathRedir;
 
 procedure TSetupUninstallLog.HandleException;
 begin
@@ -96,8 +95,8 @@ begin
     SetFilenameLabelText('', True);
 end;
 
-procedure InstallMessageBoxCallback(const Flags: LongInt; const After: Boolean;
-  const Param: LongInt);
+procedure InstallMessageBoxCallback(const Flags: Cardinal; const After: Boolean;
+  const Param: NativeInt);
 const
   States: array [TNewProgressBarState] of TTaskbarProgressState =
     (tpsNormal, tpsError, tpsPaused);
@@ -120,12 +119,11 @@ end;
 
 procedure CalcFilesSize(var InstallFilesSize, AfterInstallFilesSize: Int64);
 var
-  N: Integer;
   CurFile: PSetupFileEntry;
 begin
   InstallFilesSize := 0;
   AfterInstallFilesSize := InstallFilesSize;
-  for N := 0 to Entries[seFile].Count-1 do begin
+  for var N := 0 to Entries[seFile].Count-1 do begin
     CurFile := PSetupFileEntry(Entries[seFile][N]);
     if ShouldProcessFileEntry(WizardComponents, WizardTasks, CurFile, False) then begin
       with CurFile^ do begin
@@ -161,7 +159,7 @@ begin
     NewMaxValue := NewMaxValue shr 1;
     Inc(ProgressShiftCount);
   end;
-  WizardForm.ProgressGauge.Max := NewMaxValue;
+  WizardForm.ProgressGauge.Max := Integer(NewMaxValue);
   SetMessageBoxCallbackFunc(InstallMessageBoxCallback, 0);
 end;
 
@@ -172,7 +170,7 @@ begin
     WizardForm.ProgressGauge.Position := NewPosition;
     WizardForm.ProgressGauge.Update;
   end;
-  SetAppTaskbarProgressValue(NewPosition, WizardForm.ProgressGauge.Max);
+  SetAppTaskbarProgressValue(UInt64(NewPosition), UInt64(WizardForm.ProgressGauge.Max));
 
   if (CodeRunner <> nil) and CodeRunner.FunctionExists('CurInstallProgressChanged', True) then begin
     try
@@ -279,12 +277,11 @@ begin
     Result := '(invalid)';
 end;
 
-function TryToGetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String;
-  var Sum: TSHA256Digest): Boolean;
+function TryToGetSHA256OfFile(const Filename: String; var Sum: TSHA256Digest): Boolean;
 { Like GetSHA256OfFile but traps exceptions locally. Returns True if successful. }
 begin
   try
-    Sum := GetSHA256OfFile(DisableFsRedir, Filename);
+    Sum := GetSHA256OfFile(Filename);
     Result := True;
   except
     Result := False;
@@ -346,17 +343,22 @@ begin
   SetProgress(MaxProgress);
 end;
 
-function ShortenOrExpandFontFilename(const Filename: String): String;
-{ Expands Filename, except if it's in the Fonts directory, in which case it
-  removes the path }
+function ShortenFontFilename(const Filename: String): String;
+{ Removes the path from Filename if it's in the Fonts directory.
+  Filename should be a super path. }
 var
   FontDir: String;
 begin
-  Result := PathExpand(Filename);
+  Result := Filename;
   FontDir := GetShellFolder(False, sfFonts);
-  if FontDir <> '' then
-    if PathCompare(PathExtractDir(Result), FontDir) = 0 then
+  if FontDir <> '' then begin
+    { Filename/Result is a super path but FontDir is not. So using
+      PathConvertSuperToNormal because PathSame does not consider
+      a super path and its normal form to be the same. This use of
+      PathConvertSuperToNormal does not introduce a limitation. }
+    if PathSame(PathExtractDir(PathConvertSuperToNormal(Result)), FontDir) then
       Result := PathExtractName(Result);
+  end;
 end;
 
 function GetLocalTimeAsStr: String;
@@ -370,13 +372,13 @@ end;
 procedure PackCustomMessagesIntoString(var S: String);
 var
   M: TMemoryStream;
-  Count, I, N: Integer;
+  Count, N: Integer;
 begin
   M := TMemoryStream.Create;
   try
     Count := 0;
     M.WriteBuffer(Count, SizeOf(Count));  { overwritten later }
-    for I := 0 to Entries[seCustomMessage].Count-1 do begin
+    for var I := 0 to Entries[seCustomMessage].Count-1 do begin
       with PSetupCustomMessageEntry(Entries[seCustomMessage][I])^ do begin
         if (LangIndex = -1) or (LangIndex = ActiveLanguage) then begin
           N := Length(Name);
@@ -409,7 +411,7 @@ begin
 end;
 
 procedure RegError(const Func: TRegErrorFunc; const RootKey: HKEY;
-  const KeyName: String; const ErrorCode: Longint);
+  const KeyName: String; const ErrorCode: DWORD);
 const
   ErrorMsgs: array[TRegErrorFunc] of TSetupMessageID =
     (msgErrorRegWriteKey, msgErrorRegCreateKey, msgErrorRegOpenKey);
@@ -419,7 +421,7 @@ begin
   raise Exception.Create(FmtSetupMessage(ErrorMsgs[Func],
       [GetRegRootKeyName(RootKey), KeyName]) + SNewLine2 +
     FmtSetupMessage(msgErrorFunctionFailedWithMessage,
-      [FuncNames[Func], IntToStr(ErrorCode), Win32ErrorString(ErrorCode)]));
+      [FuncNames[Func], IntToStr(ErrorCode), Win32ErrorString(DWORD(ErrorCode))]));
 end;
 
 procedure WriteMsgData(const F: TFile);
@@ -429,13 +431,38 @@ var
 begin
   FillChar(MsgLangOpts, SizeOf(MsgLangOpts), 0);
   MsgLangOpts.ID := MessagesLangOptionsID;
+
+  { TMessagesLangOptions fields and flags from LangOptions - together these are a simplified
+    version of TSetupLanguageEntry }
   StrPLCopy(MsgLangOpts.DialogFontName, LangOptions.DialogFontName,
     (SizeOf(MsgLangOpts.DialogFontName) div SizeOf(MsgLangOpts.DialogFontName[0])) - 1);
   MsgLangOpts.DialogFontSize := LangOptions.DialogFontSize;
+  MsgLangOpts.DialogFontBaseScaleWidth := LangOptions.DialogFontBaseScaleWidth;
+  MsgLangOpts.DialogFontBaseScaleHeight := LangOptions.DialogFontBaseScaleHeight;
   if LangOptions.RightToLeft then
     Include(MsgLangOpts.Flags, lfRightToLeft);
+
+  { Other TMessagesLangOptions fields and flags - all appearance only }
+  MsgLangOpts.WizardSizePercentX := SetupHeader.WizardSizePercentX;
+  MsgLangOpts.WizardSizePercentY := SetupHeader.WizardSizePercentY;
+  MsgLangOpts.WizardBackColor := OrigSetupHeaderWizardBackColor; { See Setup.MainFunc }
+  MsgLangOpts.WizardBackColorDynamicDark := SetupHeader.WizardBackColorDynamicDark;
+  MsgLangOpts.WizardLightControlStyling := SetupHeader.WizardLightControlStyling;
+  if shWizardModern in SetupHeader.Options then
+    Include(MsgLangOpts.Flags, lfWizardModern);
+  if shWizardBorderStyled in SetupHeader.Options then
+    Include(MsgLangOpts.Flags, lfWizardBorderStyled);
+  if shWizardKeepAspectRatio in SetupHeader.Options then
+    Include(MsgLangOpts.Flags, lfWizardKeepAspectRatio);
+  if shWizardBevelsHidden in SetupHeader.Options then
+    Include(MsgLangOpts.Flags, lfWizardBevelsHidden);
+  if SetupHeader.WizardDarkStyle = wdsDark then
+    Include(MsgLangOpts.Flags, lfWizardDarkStyleDark)
+  else if SetupHeader.WizardDarkStyle = wdsDynamic then
+    Include(MsgLangOpts.Flags, lfWizardDarkStyleDynamic);
+
   LangEntry := Entries[seLanguage][ActiveLanguage];
-  F.WriteBuffer(LangEntry.Data[1], Length(LangEntry.Data));
+  F.WriteBuffer(LangEntry.Data[1], ULength(LangEntry.Data));
   F.WriteBuffer(MsgLangOpts, SizeOf(MsgLangOpts));
 end;
 
@@ -446,20 +473,19 @@ begin
 end;
 
 procedure ProcessInstallDeleteEntries;
-var
-  I: Integer;
 begin
-  for I := 0 to Entries[seInstallDelete].Count-1 do
+  for var I := 0 to Entries[seInstallDelete].Count-1 do
     with PSetupDeleteEntry(Entries[seInstallDelete][I])^ do
       if ShouldProcessEntry(WizardComponents, WizardTasks, Components, Tasks, Languages, Check) then begin
         DebugNotifyEntry(seInstallDelete, I);
         NotifyBeforeInstallEntry(BeforeInstall);
+        const Path = ApplyPathRedirRules(InstallDefault64Bit, ExpandConst(Name), tpCurrent);
         case DeleteType of
           dfFiles, dfFilesAndOrSubdirs:
-            DelTree(InstallDefaultDisableFsRedir, ExpandConst(Name), False, True, DeleteType = dfFilesAndOrSubdirs, False,
+            DelTree(Path, False, True, DeleteType = dfFilesAndOrSubdirs, False,
               nil, nil, nil);
           dfDirIfEmpty:
-            DelTree(InstallDefaultDisableFsRedir, ExpandConst(Name), True, False, False, False, nil, nil, nil);
+            DelTree(Path, True, False, False, False, nil, nil, nil);
         end;
         NotifyAfterInstallEntry(AfterInstall);
       end;
@@ -485,10 +511,8 @@ begin
 end;
 
 procedure ProcessComponentEntries;
-var
-  I: Integer;
 begin
-  for I := 0 to Entries[seComponent].Count-1 do begin
+  for var I := 0 to Entries[seComponent].Count-1 do begin
     with PSetupComponentEntry(Entries[seComponent][I])^ do begin
       if ShouldProcessEntry(WizardComponents, nil, Name, '', Languages, '') and (coRestart in Options) then begin
         NeedsRestart := True;
@@ -499,10 +523,8 @@ begin
 end;
 
 procedure ProcessTasksEntries;
-var
-  I: Integer;
 begin
-  for I := 0 to Entries[seTask].Count-1 do begin
+  for var I := 0 to Entries[seTask].Count-1 do begin
     with PSetupTaskEntry(Entries[seTask][I])^ do begin
       if ShouldProcessEntry(nil, WizardTasks, '', Name, Languages, '') and (toRestart in Options) then begin
         NeedsRestart := True;

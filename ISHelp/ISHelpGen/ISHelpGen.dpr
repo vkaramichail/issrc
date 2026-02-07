@@ -15,7 +15,7 @@ uses
   PathFunc in '..\..\Components\PathFunc.pas';
 
 const
-  Version = '1.22';
+  Version = '1.23';
 
   XMLFileVersion = '1';
 
@@ -1008,6 +1008,10 @@ var
   StartTime, EndTime: DWORD;
 begin
   try
+    {$IFDEF DEBUG}
+    ReportMemoryLeaksOnShutdown := True;
+    {$ENDIF}
+
     Writeln('ISHelpGen v' + Version + ' by Jordan Russell & Martijn Laan');
 
     if (ParamCount = 0) or (ParamCount > 2) then begin

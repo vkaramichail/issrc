@@ -12,7 +12,7 @@ unit IDE.SignToolsForm;
 interface
 
 uses
-    Classes, Controls, StdCtrls, UIStateForm;
+  Classes, Controls, StdCtrls, UIStateForm;
 
 type
   TSignToolsForm = class(TUIStateForm)
@@ -94,7 +94,7 @@ end;
 procedure TSignToolsForm.CommandDocBitBtnClick(Sender: TObject);
 begin
   if Assigned(HtmlHelp) then
-    HtmlHelp(GetDesktopWindow, PChar(GetHelpFile), HH_DISPLAY_TOPIC, Cardinal(PChar('topic_setup_signtool.htm')));
+    HtmlHelp(GetDesktopWindow, PChar(GetHelpFile), HH_DISPLAY_TOPIC, DWORD_PTR(PChar('topic_setup_signtool.htm')));
 end;
 
 procedure TSignToolsForm.CreateParams(var Params: TCreateParams);

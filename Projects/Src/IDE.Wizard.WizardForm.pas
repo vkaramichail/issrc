@@ -312,9 +312,7 @@ begin
 
   FLanguages := TStringList.Create;
   FLanguages.Sorted := True;
-  FLanguages.Duplicates := dupIgnore; { Some systems also return .islu files when searching for *.isl }
   AddLanguages('isl');
-  AddLanguages('islu');
   FLanguages.Sorted := False;
   FLanguages.Insert(0, LanguagesDefaultIsl);
 
@@ -322,8 +320,10 @@ begin
   if not InitFormTheme(Self) then
     OuterNotebook.Color := InitFormThemeGetBkColor(True);
 
-  if FontExists('Verdana') then
-    WelcomeLabel1.Font.Name := 'Verdana';
+  if FontExists('Segoe UI') then begin
+    WelcomeLabel1.Font.Name := 'Segoe UI';
+    WelcomeLabel1.Font.Size := 14;
+  end;
 
   MakeBold(PageNameLabel);
   MakeBold(RequiredLabel1);
@@ -345,6 +345,10 @@ begin
   FinishedImage.Bitmap := WelcomeImage.Bitmap;
 
   RequiredLabel2.Left := RequiredLabel1.Left + RequiredLabel1.Width;
+
+  { See Setup.WizardForm }
+  if IsCustomStyleActive then
+    BackButton.Left := BackButton.Left - 2;
 
   { AppInfo }
   AppNameEdit.Text := 'My Program';
@@ -692,8 +696,9 @@ end;
 
 procedure TWizardForm.UpdateWizardStyleImages;
 
-  procedure UpdateWizardStyleImage(const WizardStylePngImage: TPngImage; const ImageName: String);
+  procedure UpdateWizardStyleImage(const WizardStylePngImage: TPngImage; ImageName: String);
   begin
+    ImageName := ImageName.Replace('dark windows11', 'dark');
     const ImageIndex = WizardStyleImageCollection.GetIndexByName(ImageName);
     if ImageIndex = -1 then
       raise Exception.CreateFmt('Image name ''%s'' not found', [ImageName]);
@@ -885,6 +890,7 @@ begin
     PreviewForm.AutoSize := True;
     PreviewForm.BorderStyle := bsNone;
     PreviewForm.BorderIcons := [];
+    PreviewForm.Color := clWindow;
     PreviewForm.KeyPreview := True;
     PreviewForm.OnKeyDown := WizardStyleImagePreviewKeyDown;
 
@@ -933,42 +939,6 @@ begin
 end;
 
 procedure TWizardForm.GenerateScript;
-
-  function Is64BitPEImage(const Filename: String): Boolean;
-  { Returns True if the specified file is a non-32-bit PE image, False
-    otherwise. }
-  var
-    F: TFile;
-    DosHeader: packed record
-      Sig: array[0..1] of AnsiChar;
-      Other: array[0..57] of Byte;
-      PEHeaderOffset: LongWord;
-    end;
-    PESigAndHeader: packed record
-      Sig: DWORD;
-      Header: TImageFileHeader;
-      OptHeaderMagic: Word;
-    end;
-  begin
-    Result := False;
-    F := TFile.Create(Filename, fdOpenExisting, faRead, fsRead);
-    try
-      if F.Read(DosHeader, SizeOf(DosHeader)) = SizeOf(DosHeader) then begin
-        if (DosHeader.Sig[0] = 'M') and (DosHeader.Sig[1] = 'Z') and
-           (DosHeader.PEHeaderOffset <> 0) then begin
-          F.Seek(DosHeader.PEHeaderOffset);
-          if F.Read(PESigAndHeader, SizeOf(PESigAndHeader)) = SizeOf(PESigAndHeader) then begin
-            if (PESigAndHeader.Sig = IMAGE_NT_SIGNATURE) and
-               (PESigAndHeader.OptHeaderMagic <> IMAGE_NT_OPTIONAL_HDR32_MAGIC) then
-              Result := True;
-          end;
-        end;
-      end;
-    finally
-      F.Free;
-    end;
-  end;
-
 var
   Script, ISPP, Setup, Languages, Tasks, Files, Registry, INI, Icons, Run, UninstallDelete: String;
   I: Integer;
@@ -1153,17 +1123,34 @@ begin
 
     { Languages }
     if FLanguages.Count > 1 then begin
-      for I := 0 to LanguagesList.Items.Count-1 do begin
-        if LanguagesList.Checked[I] then begin
-          LanguageMessagesFile := FLanguages[Integer(LanguagesList.ItemObject[I])];
-          if LanguageMessagesFile <> LanguagesDefaultIsl then begin
-            LanguageName := LanguagesList.Items[I];
-            LanguageMessagesFile := 'Languages\' + LanguageMessagesFile;
-          end else
-            LanguageName := LanguagesDefaultIslDescription;
-          StringChange(LanguageName, ' ', '');
-          LanguageName := LowerCase(LanguageName);
-          Languages := Languages + 'Name: "' + LanguageName + '"; MessagesFile: "compiler:' + LanguageMessagesFile + '"' + SNewLine;
+      var UsingISPPEmitLanguagesSection: Boolean;
+
+      if ISPPCheck.Checked then begin
+        UsingISPPEmitLanguagesSection := True;
+        for I := 0 to LanguagesList.Items.Count-1 do begin
+          if not LanguagesList.Checked[I] then begin
+            UsingISPPEmitLanguagesSection := False;
+            Break;
+          end;
+        end;
+      end else
+        UsingISPPEmitLanguagesSection := False;
+
+      if UsingISPPEmitLanguagesSection then
+        ISPP := ISPP + '#expr EmitLanguagesSection' + SNewLine
+      else begin
+        for I := 0 to LanguagesList.Items.Count-1 do begin
+          if LanguagesList.Checked[I] then begin
+            LanguageMessagesFile := FLanguages[Integer(LanguagesList.ItemObject[I])];
+            if LanguageMessagesFile <> LanguagesDefaultIsl then begin
+              LanguageName := LanguagesList.Items[I];
+              LanguageMessagesFile := 'Languages\' + LanguageMessagesFile;
+            end else
+              LanguageName := LanguagesDefaultIslDescription;
+            StringChange(LanguageName, ' ', '');
+            LanguageName := LowerCase(LanguageName);
+            Languages := Languages + 'Name: "' + LanguageName + '"; MessagesFile: "compiler:' + LanguageMessagesFile + '"' + SNewLine;
+          end;
         end;
       end;
     end;

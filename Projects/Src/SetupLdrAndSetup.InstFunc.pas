@@ -2,7 +2,7 @@ unit SetupLdrAndSetup.InstFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -22,27 +22,33 @@ function CreateTempDir(const Extension: String;
   const LimitCurrentUserSidAccess: Boolean; var Protected: Boolean): String; overload;
 function CreateTempDir(const Extension: String;
   const LimitCurrentUserSidAccess: Boolean): String; overload;
-procedure DelayDeleteFile(const DisableFsRedir: Boolean; const Filename: String;
-  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
+procedure DelayDeleteFile(const Filename: String;
+  const MaxTries: Integer; const FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
 function DetermineDefaultLanguage(const GetLanguageEntryProc: TGetLanguageEntryProc;
   const Method: TSetupLanguageDetectionMethod; const LangParameter: String;
   var ResultIndex: Integer): TDetermineDefaultLanguageResult;
+function GetFinalCurrentDir: String;
+function GetFinalFileName(const Filename: String): String;
+procedure RaiseFunctionFailedError(const FunctionName: String);
 function RestartComputer: Boolean;
+procedure SplitNewParamStr(const Index: Integer; var AName, AValue: String);
 
+{$IFDEF SETUPPROJ}
 { The following are not called by other SetupLdr units: they are only called by the
-  code below and by other Setup units }
+  code below and by other Setup units - so the implementations exist below but they
+  are not included here in the interface, for clarity }
 function CreateSafeDirectory(const LimitCurrentUserSidAccess: Boolean; Path: String;
   var ErrorCode: DWORD; out Protected: Boolean): Boolean; overload;
 function CreateSafeDirectory(const LimitCurrentUserSidAccess: Boolean; Path: String;
   var ErrorCode: DWORD): Boolean; overload;
 function UIntToBase36Str(AValue: UInt32; const ADigits: Integer): String;
-function GenerateUniqueName(const DisableFsRedir: Boolean; Path: String;
-  const Extension: String): String;
+function GenerateUniqueName(Path: String; const Extension: String): String;
+{$ENDIF}
 
 implementation
 
 uses
-  PathFunc, SetupLdrAndSetup.Messages, Shared.SetupMessageIDs, SetupLdrAndSetup.RedirFunc;
+  PathFunc, SetupLdrAndSetup.Messages, Shared.SetupMessageIDs;
 
 function ConvertStringSecurityDescriptorToSecurityDescriptorW(
   StringSecurityDescriptor: PWideChar;
@@ -148,8 +154,7 @@ begin
   end;
 end;
 
-function GenerateUniqueName(const DisableFsRedir: Boolean; Path: String;
-  const Extension: String): String;
+function GenerateUniqueName(Path: String; const Extension: String): String;
 const
   FiveDigitsRange = 36 * 36 * 36 * 36 * 36;
 begin
@@ -170,7 +175,7 @@ begin
       UIntToBase36Str(TStrongRandom.GenerateUInt32Range(FiveDigitsRange), 5) +
       UIntToBase36Str(TStrongRandom.GenerateUInt32Range(FiveDigitsRange), 5) +
       Extension;
-  until not FileOrDirExistsRedir(DisableFsRedir, Filename);
+  until not FileOrDirExists(Filename);
   Result := Filename;
 end;
 
@@ -182,7 +187,7 @@ var
   ErrorCode: DWORD;
 begin
   while True do begin
-    Dir := GenerateUniqueName(False, GetTempDir, Extension);
+    Dir := GenerateUniqueName(GetTempDir, Extension);
     if CreateSafeDirectory(LimitCurrentUserSidAccess, Dir, ErrorCode, Protected) then
       Break;
     if ErrorCode <> ERROR_ALREADY_EXISTS then
@@ -241,8 +246,8 @@ begin
     WM_QUERYENDSESSION and WM_ENDSESSION messages. }
 end;
 
-procedure DelayDeleteFile(const DisableFsRedir: Boolean; const Filename: String;
-  const MaxTries, FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
+procedure DelayDeleteFile(const Filename: String;
+  const MaxTries: Integer; const FirstRetryDelayMS, SubsequentRetryDelayMS: Cardinal);
 { Attempts to delete Filename up to MaxTries times, retrying if the file is
   in use. It sleeps FirstRetryDelayMS msec after the first try, and
   SubsequentRetryDelayMS msec after subsequent tries. }
@@ -252,7 +257,7 @@ begin
       Sleep(FirstRetryDelayMS)
     else if I > 1 then
       Sleep(SubsequentRetryDelayMS);
-    if DeleteFileRedir(DisableFsRedir, Filename) or
+    if Windows.DeleteFile(PChar(Filename)) or
        (GetLastError = ERROR_FILE_NOT_FOUND) or
        (GetLastError = ERROR_PATH_NOT_FOUND) then
       Break;
@@ -338,6 +343,103 @@ begin
       end;
       Inc(I);
     end;
+  end;
+end;
+
+procedure SplitNewParamStr(const Index: Integer; var AName, AValue: String);
+{ Reads a command line parameter. If it is in the form "/PARAM=VALUE" then
+  AName is set to "/PARAM=" and AValue is set to "VALUE". Otherwise, the full
+  parameter is stored in AName, and AValue is set to an empty string. }
+var
+  S: String;
+  P: Integer;
+begin
+  S := NewParamStr(Index);
+  if (S <> '') and (S[1] = '/') then begin
+    P := PathPos('=', S);
+    if P <> 0 then begin
+      AName := Copy(S, 1, P);
+      AValue := Copy(S, P+1, Maxint);
+      Exit;
+    end;
+  end;
+  AName := S;
+  AValue := '';
+end;
+
+procedure RaiseFunctionFailedError(const FunctionName: String);
+begin
+  raise Exception.Create(FmtSetupMessage1(msgErrorFunctionFailedNoCode,
+    FunctionName));
+end;
+
+function GetFinalFileName(const Filename: String): String;
+{ Calls GetFinalPathNameByHandle to expand any SUBST'ed drives, network drives,
+  and symbolic links in Filename. This is needed for elevation to succeed when
+  Setup is started from a SUBST'ed drive letter. }
+
+  function ConvertToNormalPath(P: PChar): String;
+  begin
+    Result := P;
+    if StrLComp(P, '\\?\', 4) = 0 then begin
+      Inc(P, 4);
+      if (PathStrNextChar(P) = P + 1) and (P[1] = ':') and PathCharIsSlash(P[2]) then
+        Result := P
+      else if StrLIComp(P, 'UNC\', 4) = 0 then begin
+        Inc(P, 4);
+        Result := '\\' + P;
+      end;
+    end;
+  end;
+
+const
+  FILE_SHARE_DELETE = $00000004;
+var
+  GetFinalPathNameByHandleFunc: function(hFile: THandle; lpszFilePath: PWideChar;
+    cchFilePath: DWORD; dwFlags: DWORD): DWORD; stdcall;
+  Attr, FlagsAndAttributes: DWORD;
+  H: THandle;
+  Buf: array[0..4095] of Char;
+begin
+  GetFinalPathNameByHandleFunc := GetProcAddress(GetModuleHandle(kernel32),
+    'GetFinalPathNameByHandleW');
+  if Assigned(GetFinalPathNameByHandleFunc) then begin
+    Attr := GetFileAttributes(PChar(Filename));
+    if Attr <> INVALID_FILE_ATTRIBUTES then begin
+      { Backup semantics must be requested in order to open a directory }
+      if Attr and FILE_ATTRIBUTE_DIRECTORY <> 0 then
+        FlagsAndAttributes := FILE_FLAG_BACKUP_SEMANTICS
+      else
+        FlagsAndAttributes := 0;
+      { Use zero access mask and liberal sharing mode to ensure success }
+      H := CreateFile(PChar(Filename), 0, FILE_SHARE_READ or FILE_SHARE_WRITE or
+        FILE_SHARE_DELETE, nil, OPEN_EXISTING, FlagsAndAttributes, 0);
+      if H <> INVALID_HANDLE_VALUE then begin
+        const Res = GetFinalPathNameByHandleFunc(H, Buf, SizeOf(Buf) div SizeOf(Buf[0]), 0);
+        CloseHandle(H);
+        if (Res > 0) and (Res < (SizeOf(Buf) div SizeOf(Buf[0])) - 16) then begin
+          { ShellExecuteEx fails with error 3 on \\?\UNC\ paths, so try to
+            convert the returned path from \\?\ form }
+          Result := ConvertToNormalPath(Buf);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+  Result := Filename;
+end;
+
+function GetFinalCurrentDir: String;
+var
+  Res: Integer;
+  Buf: array[0..MAX_PATH-1] of Char;
+begin
+  DWORD(Res) := GetCurrentDirectory(SizeOf(Buf) div SizeOf(Buf[0]), Buf);
+  if (Res > 0) and (Res < SizeOf(Buf) div SizeOf(Buf[0])) then
+    Result := GetFinalFileName(Buf)
+  else begin
+    RaiseFunctionFailedError('GetCurrentDirectory');
+    Result := '';
   end;
 end;
 

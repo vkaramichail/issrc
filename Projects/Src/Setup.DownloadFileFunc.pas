@@ -2,7 +2,7 @@ unit Setup.DownloadFileFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -387,8 +387,6 @@ var
   TempF: TFile;
   TempFileLeftOver: Boolean;
   HTTPDataReceiver: THTTPDataReceiver;
-  RetriesLeft: Integer;
-  LastError: DWORD;
 begin
   if Url = '' then
     InternalError('DownloadTemporaryFile: Invalid Url value');
@@ -402,9 +400,10 @@ begin
   { Does not disable FS redirection, like everything else working on the temp dir }
 
   { Prepare directory }
+  var DidJustDeleteDestFile := False;
   if NewFileExists(DestFile) then begin
     if Verification.Typ = fvHash then begin
-      if SHA256DigestsEqual(GetSHA256OfFile(False, DestFile), Verification.Hash) then begin
+      if SHA256DigestsEqual(GetSHA256OfFile(DestFile), Verification.Hash) then begin
         Log('  File already downloaded.');
         Result := 0;
         Exit;
@@ -431,17 +430,18 @@ begin
     end;
 
     SetFileAttributes(PChar(DestFile), GetFileAttributes(PChar(DestFile)) and not FILE_ATTRIBUTE_READONLY);
-    DelayDeleteFile(False, DestFile, 13, 50, 250);
+    DelayDeleteFile(DestFile, 13, 50, 250);
+    DidJustDeleteDestFile := True;
   end else
-    ForceDirectories(False, PathExtractPath(DestFile));
+    ForceDirectories(PathExtractPath(DestFile));
 
   { Create temporary file }
-  TempFile := GenerateUniqueName(False, PathExtractPath(DestFile), '.tmp');
+  TempFile := GenerateUniqueName(PathExtractPath(DestFile), '.tmp');
   TempF := TFile.Create(TempFile, fdCreateAlways, faWrite, fsNone);
   TempFileLeftOver := True;
 
   HTTPDataReceiver := THTTPDataReceiver.Create(Url,
-      DownloadTemporaryFileUser, DownloadTemporaryFilePass, TempF);
+    DownloadTemporaryFileUser, DownloadTemporaryFilePass, TempF);
   try
     HTTPDataReceiver.BaseName := BaseName;
     HTTPDataReceiver.OnDownloadProgress := OnDownloadProgress;
@@ -466,7 +466,7 @@ begin
       else
         DoISSigVerify(TempF, nil, DestFile, False, Verification.ISSigAllowedKeys, ExpectedFileHash);
         FreeAndNil(TempF);
-        const FileHash = GetSHA256OfFile(False, TempFile);
+        const FileHash = GetSHA256OfFile(TempFile);
       if not SHA256DigestsEqual(FileHash, ExpectedFileHash) then
         VerificationError(veFileHashIncorrect);
       Log(VerificationSuccessfulLogMessage);
@@ -481,23 +481,24 @@ begin
     end;
 
     { Rename the temporary file to the new name now, with retries if needed }
-    RetriesLeft := 4;
-    while not MoveFile(PChar(TempFile), PChar(DestFile)) do begin
-      { Couldn't rename the temporary file... }
-      LastError := GetLastError;
-      { Does the error code indicate that it is possibly in use? }
-      if LastErrorIndicatesPossiblyInUse(LastError, True) then begin
+    const CapturableDestFile = DestFile;
+    PerformFileOperationWithRetries(4, DidJustDeleteDestFile,
+      function(out LastError: Cardinal): Boolean
+      begin
+        Result := MoveFile(PChar(TempFile), PChar(CapturableDestFile));
+        if not Result then
+          LastError := GetLastError;
+      end,
+      procedure(const LastError: Cardinal)
+      begin
         LogFmt('  The existing file appears to be in use (%d). ' +
           'Retrying.', [LastError]);
-        Dec(RetriesLeft);
         Sleep(1000);
-        if RetriesLeft > 0 then
-          Continue;
-      end;
-      { Some other error occurred, or we ran out of tries }
-      SetLastError(LastError);
-      Win32ErrorMsg('MoveFile'); { Throws an exception }
-    end;
+      end,
+      procedure(const LastError: Cardinal; var TryOnceMore: Boolean)
+      begin
+        Win32ErrorMsg('MoveFile'); { Throws an exception }
+      end);
     TempFileLeftOver := False;
   finally
     TempF.Free;

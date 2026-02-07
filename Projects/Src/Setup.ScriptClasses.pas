@@ -20,13 +20,32 @@ procedure ScriptClassesLibraryUpdateVars(ScriptInterpreter: TIFPSExec);
 implementation
 
 uses
-  Windows, Controls, Forms, StdCtrls, Graphics, Imaging.pngimage,
+  Windows, Controls, Forms, StdCtrls, Graphics, Imaging.pngimage, ExtCtrls,
   uPSR_std, uPSR_classes, uPSR_graphics, uPSR_controls, uPSR_forms,
   uPSR_stdctrls, uPSR_extctrls, uPSR_comobj,
   NewStaticText, NewCheckListBox, NewProgressBar, RichEditViewer,
-  ExtCtrls, UIStateForm, Setup.SetupForm, Setup.MainForm, Setup.WizardForm, Shared.SetupTypes, PasswordEdit,
-  FolderTreeView, BitmapButton, BitmapImage, NewNotebook, Setup.ScriptDlg, BidiCtrls,
-  Setup.UninstallProgressForm;
+  UIStateForm, PasswordEdit, FolderTreeView, BitmapButton, BitmapImage, NewNotebook, NewCtrls,
+  Shared.SetupTypes, Shared.CommonFunc.Vcl,
+  Setup.SetupForm, Setup.MainForm, Setup.WizardForm, Setup.WizardForm.CustomPages, Setup.UninstallProgressForm;
+
+procedure TControlParentR(Self: TControl; var T: TWinControl); begin T := Self.Parent; end;
+
+procedure TControlParentW(Self: TControl; T: TWinControl);
+begin
+  TSetupForm.SetCtlParent(Self, T);
+end;
+
+procedure RegisterControl_R(Cl: TPSRuntimeClassImporter);
+begin
+  RIRegisterTControl(Cl);
+
+  with Cl.FindClass(AnsiString(TControl.ClassName)) do
+  begin
+    { This overrides the property helper added by RIRegisterTControl, because uPSRuntime's SpecImport
+      starts at the end of the FClassItems list when looking for property helpers }
+    RegisterPropertyHelper(@TControlParentR, @TControlParentW, 'Parent');
+  end;
+end;
 
 type
   TWinControlAccess = class(TWinControl);
@@ -176,9 +195,10 @@ begin
   end;
 end;
 
-procedure RegisterBidiCtrls_R(Cl: TPSRuntimeClassImporter);
+procedure RegisterNewCtrls_R(Cl: TPSRuntimeClassImporter);
 begin
   Cl.Add(TNewEdit);
+  Cl.Add(TNewPathEdit);
   Cl.Add(TNewMemo);
   Cl.Add(TNewComboBox);
   Cl.Add(TNewListBox);
@@ -194,8 +214,8 @@ begin
   end;
 end;
 
-procedure TNewNotebookPages_R(Self: TNewNotebook; var T: TNewNotebookPage; const t1: Integer); begin T := Self.Pages[t1]; end;
-procedure TNewNotebookPageCount_R(Self: TNewNotebook; var T: Integer); begin T := Self.PageCount; end;
+procedure TNewNotebookPages_R(Self: TNewNotebook; var T: TNewNotebookPage; const t1: NativeInt); begin T := Self.Pages[t1]; end;
+procedure TNewNotebookPageCount_R(Self: TNewNotebook; var T: NativeInt); begin T := Self.PageCount; end;
 
 procedure RegisterNewNotebook_R(CL: TPSRuntimeClassImporter);
 begin
@@ -207,8 +227,15 @@ begin
   end;
 end;
 
-procedure TNewNotebookPageNotebook_W(Self: TNewNotebookPage; const T: TNewNotebook); begin Self.Notebook := T; end;
 procedure TNewNotebookPageNotebook_R(Self: TNewNotebookPage; var T: TNewNotebook); begin T := Self.Notebook; end;
+
+procedure TNewNotebookPageNotebook_W(Self: TNewNotebookPage; const T: TNewNotebook);
+begin
+  { Set CurrentPPI of the control to be parented to the CurrentPPI of the parent, preventing VCL
+    from scaling the control. Also see TSetupForm.CreateWnd.  }
+  Self.SetCurrentPPI(T.CurrentPPI);
+  Self.Notebook := T;
+end;
 
 procedure RegisterNewNotebookPage_R(CL: TPSRuntimeClassImporter);
 begin
@@ -230,7 +257,7 @@ begin
     RegisterMethod(@TSetupForm.CalculateButtonWidth, 'CalculateButtonWidth');
     RegisterMethod(@TSetupForm.ShouldSizeX, 'ShouldSizeX');
     RegisterMethod(@TSetupForm.ShouldSizeY, 'ShouldSizeY');
-    RegisterMethod(@TSetupForm.FlipSizeAndCenterIfNeeded, 'FlipSizeAndCenterIfNeeded');
+    RegisterMethod(@TSetupForm.FlipAndCenterIfNeeded, 'FlipAndCenterIfNeeded');
   end;
 end;
 
@@ -254,10 +281,10 @@ begin
   Cl.Add(TWizardPage);
 end;
 
-procedure TInputQueryWizardPageEdits_R(Self: TInputQueryWizardPage; var T: TPasswordEdit; const t1: Integer); begin T := Self.Edits[t1]; end;
-procedure TInputQueryWizardPagePromptLabels_R(Self: TInputQueryWizardPage; var T: TNewStaticText; const t1: Integer); begin T := Self.PromptLabels[t1]; end;
-procedure TInputQueryWizardPageValues_R(Self: TInputQueryWizardPage; var T: String; const t1: Integer); begin T := Self.Values[t1]; end;
-procedure TInputQueryWizardPageValues_W(Self: TInputQueryWizardPage; const T: String; const t1: Integer); begin Self.Values[t1] := T; end;
+procedure TInputQueryWizardPageEdits_R(Self: TInputQueryWizardPage; var T: TPasswordEdit; const t1: NativeInt); begin T := Self.Edits[t1]; end;
+procedure TInputQueryWizardPagePromptLabels_R(Self: TInputQueryWizardPage; var T: TNewStaticText; const t1: NativeInt); begin T := Self.PromptLabels[t1]; end;
+procedure TInputQueryWizardPageValues_R(Self: TInputQueryWizardPage; var T: String; const t1: NativeInt); begin T := Self.Values[t1]; end;
+procedure TInputQueryWizardPageValues_W(Self: TInputQueryWizardPage; const T: String; const t1: NativeInt); begin Self.Values[t1] := T; end;
 
 procedure RegisterInputQueryWizardPage_R(CL: TPSRuntimeClassImporter);
 begin
@@ -286,11 +313,11 @@ begin
   end;
 end;
 
-procedure TInputDirWizardPageButtons_R(Self: TInputDirWizardPage; var T: TNewButton; const t1: Integer); begin T := Self.Buttons[t1]; end;
-procedure TInputDirWizardPageEdits_R(Self: TInputDirWizardPage; var T: TEdit; const t1: Integer); begin T := Self.Edits[t1]; end;
-procedure TInputDirWizardPagePromptLabels_R(Self: TInputDirWizardPage; var T: TNewStaticText; const t1: Integer); begin T := Self.PromptLabels[t1]; end;
-procedure TInputDirWizardPageValues_W(Self: TInputDirWizardPage; const T: String; const t1: Integer); begin Self.Values[t1] := T; end;
-procedure TInputDirWizardPageValues_R(Self: TInputDirWizardPage; var T: String; const t1: Integer); begin T := Self.Values[t1]; end;
+procedure TInputDirWizardPageButtons_R(Self: TInputDirWizardPage; var T: TNewButton; const t1: NativeInt); begin T := Self.Buttons[t1]; end;
+procedure TInputDirWizardPageEdits_R(Self: TInputDirWizardPage; var T: TEdit; const t1: NativeInt); begin T := Self.Edits[t1]; end;
+procedure TInputDirWizardPagePromptLabels_R(Self: TInputDirWizardPage; var T: TNewStaticText; const t1: NativeInt); begin T := Self.PromptLabels[t1]; end;
+procedure TInputDirWizardPageValues_W(Self: TInputDirWizardPage; const T: String; const t1: NativeInt); begin Self.Values[t1] := T; end;
+procedure TInputDirWizardPageValues_R(Self: TInputDirWizardPage; var T: String; const t1: NativeInt); begin T := Self.Values[t1]; end;
 
 procedure RegisterInputDirWizardPage_R(CL: TPSRuntimeClassImporter);
 begin
@@ -304,13 +331,13 @@ begin
   end;
 end;
 
-procedure TInputFileWizardPageButtons_R(Self: TInputFileWizardPage; var T: TNewButton; const t1: Integer); begin T := Self.Buttons[t1]; end;
-procedure TInputFileWizardPagePromptLabels_R(Self: TInputFileWizardPage; var T: TNewStaticText; const t1: Integer); begin T := Self.PromptLabels[t1]; end;
-procedure TInputFileWizardPageEdits_R(Self: TInputFileWizardPage; var T: TEdit; const t1: Integer); begin T := Self.Edits[t1]; end;
-procedure TInputFileWizardPageValues_W(Self: TInputFileWizardPage; const T: String; const t1: Integer); begin Self.Values[t1] := T; end;
-procedure TInputFileWizardPageValues_R(Self: TInputFileWizardPage; var T: String; const t1: Integer); begin T := Self.Values[t1]; end;
-procedure TInputFileWizardPageIsSaveButton_W(Self: TInputFileWizardPage; const T: Boolean; const t1: Integer); begin Self.IsSaveButton[t1] := T; end;
-procedure TInputFileWizardPageIsSaveButton_R(Self: TInputFileWizardPage; var T: Boolean; const t1: Integer); begin T := Self.IsSaveButton[t1]; end;
+procedure TInputFileWizardPageButtons_R(Self: TInputFileWizardPage; var T: TNewButton; const t1: NativeInt); begin T := Self.Buttons[t1]; end;
+procedure TInputFileWizardPagePromptLabels_R(Self: TInputFileWizardPage; var T: TNewStaticText; const t1: NativeInt); begin T := Self.PromptLabels[t1]; end;
+procedure TInputFileWizardPageEdits_R(Self: TInputFileWizardPage; var T: TEdit; const t1: NativeInt); begin T := Self.Edits[t1]; end;
+procedure TInputFileWizardPageValues_W(Self: TInputFileWizardPage; const T: String; const t1: NativeInt); begin Self.Values[t1] := T; end;
+procedure TInputFileWizardPageValues_R(Self: TInputFileWizardPage; var T: String; const t1: NativeInt); begin T := Self.Values[t1]; end;
+procedure TInputFileWizardPageIsSaveButton_W(Self: TInputFileWizardPage; const T: Boolean; const t1: NativeInt); begin Self.IsSaveButton[t1] := T; end;
+procedure TInputFileWizardPageIsSaveButton_R(Self: TInputFileWizardPage; var T: Boolean; const t1: NativeInt); begin T := Self.IsSaveButton[t1]; end;
 
 procedure RegisterInputFileWizardPage_R(CL: TPSRuntimeClassImporter);
 begin
@@ -417,7 +444,7 @@ begin
     RIRegisterTBitmap(Cl, True);
 
     { Controls }
-    RIRegisterTControl(Cl);
+    RegisterControl_R(Cl);
     RegisterWinControl_R(Cl);
     RIRegisterTGraphicControl(Cl);
     RIRegisterTCustomControl(Cl);
@@ -467,7 +494,7 @@ begin
     RegisterStartMenuFolderTreeView_R(Cl);
     RegisterBitmapButton_R(Cl);
     RegisterBitmapImage_R(Cl);
-    RegisterBidiCtrls_R(Cl);
+    RegisterNewCtrls_R(Cl);
 
     RegisterNewNotebook_R(Cl);
     RegisterNewNotebookPage_R(Cl);

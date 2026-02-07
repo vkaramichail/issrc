@@ -12,7 +12,7 @@ unit Shared.SetupSectionDirectives;
 interface
 
 const
-  SetupSectionDirectivePrefixLength = 2;
+  SetupSectionDirectivePrefix = 'ss';
 type
   TSetupSectionDirective = (
     ssAllowCancelDuringInstall,
@@ -110,9 +110,11 @@ type
     ssPassword,
     ssPrivilegesRequired,
     ssPrivilegesRequiredOverridesAllowed,
+    ssRedirectionGuard,
     ssReserveBytes,
     ssRestartApplications,
     ssRestartIfNeededByRun,
+    ssSetupArchitecture,
     ssSetupIconFile,
     ssSetupLogging,
     ssSetupMutex,
@@ -169,12 +171,19 @@ type
     ssWindowShowCaption,
     ssWindowStartMaximized,
     ssWindowVisible,
+    ssWizardBackColor,
+    ssWizardBackColorDynamicDark,
+    ssWizardBackImageFile,
+    ssWizardBackImageFileDynamicDark,
+    ssWizardBackImageOpacity,
     ssWizardImageAlphaFormat,
     ssWizardImageBackColor,
     ssWizardImageBackColorDynamicDark,
     ssWizardImageFile,
     ssWizardImageFileDynamicDark,
+    ssWizardImageOpacity,
     ssWizardImageStretch,
+    ssWizardKeepAspectRatio,
     ssWizardResizable,
     ssWizardSmallImageBackColor,
     ssWizardSmallImageBackColorDynamicDark,

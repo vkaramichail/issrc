@@ -16,7 +16,7 @@ interface
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, WinXPanels, ExtCtrls, StdCtrls,
-  BidiCtrls, BitmapImage, NewStaticText,
+  NewCtrls, BitmapImage, NewStaticText,
   Setup.SetupForm;
 
 const
@@ -64,14 +64,14 @@ type
 
 function TaskDialogForm(const Instruction, Text, Caption: String; const Icon: PChar;
   const CommonButtons: Cardinal; const ButtonLabels: array of String; const ButtonIDs: array of Integer;
-  const DefCommonButton, ShieldButton: Integer; const TriggerMessageBoxCallbackFuncFlags: LongInt;
+  const DefCommonButton, ShieldButton: Integer; const TriggerMessageBoxCallbackFuncFlags: Cardinal;
   const VerificationText: String; const pfVerificationFlagChecked: PBOOL; const CopyFormat: TCopyFormat;
   const SetForeground: Boolean): Integer;
 
 implementation
 
 uses
-  CommCtrl, Clipbrd, Themes,
+  CommCtrl, Clipbrd, Themes, ShellAPI,
   Shared.SetupMessageIDs, Shared.CommonFunc, Shared.CommonFunc.Vcl,
   SetupLdrAndSetup.Messages, Setup.WizardForm, Setup.MainFunc;
 
@@ -79,7 +79,7 @@ uses
 
 function TaskDialogForm(const Instruction, Text, Caption: String; const Icon: PChar;
   const CommonButtons: Cardinal; const ButtonLabels: array of String; const ButtonIDs: array of Integer;
-  const DefCommonButton, ShieldButton: Integer; const TriggerMessageBoxCallbackFuncFlags: LongInt;
+  const DefCommonButton, ShieldButton: Integer; const TriggerMessageBoxCallbackFuncFlags: Cardinal;
   const VerificationText: String; const pfVerificationFlagChecked: PBOOL; const CopyFormat: TCopyFormat;
   const SetForeground: Boolean): Integer;
 begin
@@ -93,7 +93,6 @@ begin
 
     if (Pos(':\', Text) <> 0) or (Pos('\\', Text) <> 0) then
       Form.Width := MulDiv(Form.Width, 125, 100);
-
     if Form.InstructionText.Visible then
       Form.InstructionText.AdjustHeight;
     if Form.TextText.Visible then
@@ -128,27 +127,30 @@ begin
   FCopyFormat := ACopyFormat;
   SetForeground := ASetForeground;
 
-  InitializeFont;
+  if not CustomWizardBackground or (SetupHeader.WizardBackColor = clWindow) then begin
+    var LStyle := StyleServices(Self);
+    if not LStyle.Enabled or LStyle.IsSystemStyle then
+      LStyle := nil;
+    if LStyle <> nil then begin
+      { Make MainPanel look the same as WizardForm's main area }
+      MainPanel.StyleElements := [];
+      MainPanel.Color := LStyle.GetStyleColor(scWindow);
+    end;
+  end else
+    MainPanel.ParentBackground := True;
 
-  var LStyle := StyleServices(Self);
-  if not LStyle.Enabled or LStyle.IsSystemStyle then
-    LStyle := nil;
-  if LStyle <> nil then begin
-    { Make MainPanel look the same as WizardForm's main area }
-    MainPanel.StyleElements := [];
-    MainPanel.Color := LStyle.GetStyleColor(scWindow);
-  end;
+  { KeepSizeX: Already bit wider than regular task dialogs
+    KeepSizeY: UpdateHeight will set height }
+  InitializeFont(True, True);
 
   const Pad = 10;
-  const PadX = ScalePixelsX(Pad);
-  const PadY = ScalePixelsY(Pad);
+  const PadX = TMarginSize(ScalePixelsX(Pad));
+  const PadY = TMarginSize(ScalePixelsY(Pad));
 
   MainPanel.Padding.Left := PadX;
   MainPanel.Padding.Top := PadY;
   MainPanel.Padding.Right := PadX;
   MainPanel.Padding.Bottom := PadY;
-  { Similar to WizardForm: without this UpdateHeight will see wrong BottomMainButton.Top }
-  MainStackPanel.HandleNeeded;
   MainStackPanel.Padding.Left := PadX; { Also see Finish }
   MainStackPanel.Spacing := PadY;
   BottomStackPanel.Spacing := PadX;
@@ -176,10 +178,6 @@ begin
       BottomStackPanel.Padding.Right := 0;
     end;
   end;
-
-  KeepSizeX := True; { Already bit wider than regular task dialogs }
-  KeepSizeY := True; { UpdateHeight already set height }
-  FlipSizeAndCenterIfNeeded(Assigned(WizardForm), WizardForm, False);
 
   if DefCommonButton > 0 then begin
     var I := DefCommonButton;
@@ -241,7 +239,7 @@ begin
 
   if LeftPanel.Visible then begin
     { Make sure the height is enough to fit the icon }
-    const MinimumClientHeight = MainPanel.Padding.Top + LeftPanel.Top + BitmapImage.Top + BitmapImage.Height;
+    const MinimumClientHeight = MainPanel.Padding.Top + LeftPanel.Top + BitmapImage.Top + BitmapImage.Height + MainPanel.Padding.Bottom;
     if MinimumClientHeight > NewClientHeight then
       NewClientHeight := MinimumClientHeight;
   end;
@@ -256,20 +254,22 @@ end;
 
 procedure TTaskDialogForm.UpdateIcon(const Icon: PChar);
 begin
-  var ResourceName := '';
+  var Siid: SHSTOCKICONID;
   if Icon = TD_ERROR_ICON then
-    ResourceName := 'Z_TASKFORM_ERRORICON' + WizardIconsPostfix
+    Siid := SIID_ERROR
   else if Icon = TD_TASKFORM_HELP_ICON then
-    ResourceName := 'Z_TASKFORM_HELPICON' + WizardIconsPostfix
+    Siid := SIID_HELP
   else if Icon = TD_INFORMATION_ICON then
-    ResourceName := 'Z_TASKFORM_INFOICON' + WizardIconsPostfix
+    Siid := SIID_INFO
   else if Icon = TD_WARNING_ICON then
-    ResourceName := 'Z_TASKFORM_WARNICON' + WizardIconsPostfix
-  else if Icon <> nil then
-    ResourceName := Icon;
+    Siid := SIID_WARNING
+  else
+    Siid := SIID_INVALID;
 
-  if ResourceName <> '' then
-    BitmapImage.InitializeFromIcon(HInstance, PChar(ResourceName), clNone, [32, 48, 64])
+  if Siid <> SIID_INVALID then
+    BitmapImage.InitializeFromStockIcon(Siid, clNone, [32, 48, 64])
+  else if Icon <> nil then
+    BitmapImage.InitializeFromIcon(HInstance, Icon, clNone, [32, 48, 64])
   else
     LeftPanel.Visible := False;
 end;
@@ -279,7 +279,7 @@ begin
   InstructionText.Visible := Instruction <> '';
   if InstructionText.Visible then begin
     InstructionText.Caption := Instruction;
-    InstructionText.Font.Size := MulDiv(Font.Size, 13, 9);
+    InstructionText.Font.Height := MulDiv(InstructionText.Font.Height, 12, 9);
   end;
   TextText.Visible := Text <> '';
   if TextText.Visible then
@@ -303,6 +303,7 @@ begin
       end else
         Hint := '';
       MainButton.Caption := Caption;
+      MainButton.Font.Height := MulDiv(MainButton.Font.Height, 12, 9);
       MainButton.CommandLinkHint := Hint;
       MainButton.ModalResult := ButtonIDs[I];
       if MainButton.ModalResult = IDCANCEL then begin

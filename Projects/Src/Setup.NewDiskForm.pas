@@ -13,14 +13,14 @@ interface
 
 uses
   Windows, SysUtils, Messages, Classes, Graphics, Controls, Forms, Dialogs,
-  Setup.SetupForm, StdCtrls, ExtCtrls, NewStaticText, BitmapImage, BidiCtrls;
+  Setup.SetupForm, StdCtrls, ExtCtrls, NewStaticText, BitmapImage, NewCtrls;
 
 type
   TNewDiskForm = class(TSetupForm)
     DiskBitmapImage: TBitmapImage;
     SelectDiskLabel: TNewStaticText;
     PathLabel: TNewStaticText;
-    PathEdit: TEdit;
+    PathEdit: TNewPathEdit;
     BrowseButton: TNewButton;
     OKButton: TNewButton;
     CancelButton: TNewButton;
@@ -38,8 +38,10 @@ function SelectDisk(const DiskNumber: Integer; const AFilename: String; var Path
 implementation
 
 uses
-  SetupLdrAndSetup.Messages, Shared.SetupMessageIDs, PathFunc, Shared.CommonFunc.Vcl, Shared.CommonFunc, BrowseFunc,
-  Setup.MainFunc, Setup.MainForm, Setup.WizardForm;
+  ShellAPI,
+  PathFunc, BrowseFunc,
+  Shared.SetupMessageIDs, Shared.CommonFunc.Vcl, Shared.CommonFunc,
+  SetupLdrAndSetup.Messages, Setup.MainFunc, Setup.MainForm, Setup.WizardForm;
 
 {$R *.DFM}
 
@@ -68,7 +70,7 @@ constructor TNewDiskForm.Create(AOwner: TComponent);
 begin
   inherited;
 
-  InitializeFont;
+  InitializeFont(False, True);
 
   Caption := SetupMessages[msgChangeDiskTitle];
   PathLabel.Caption := SetupMessages[msgPathLabel];
@@ -76,16 +78,13 @@ begin
   OKButton.Caption := SetupMessages[msgButtonOK];
   CancelButton.Caption := SetupMessages[msgButtonCancel];
 
-  DiskBitmapImage.InitializeFromIcon(HInstance, PChar('Z_DISKICON' + WizardIconsPostfix), clNone, [48, 64]); {don't localize}
-
-  TryEnableAutoCompleteFileSystem(PathEdit.Handle);
+  DiskBitmapImage.InitializeFromStockIcon(SIID_MEDIABLANKCD, clNone, [48, 64]);
 
   SetForeground := True;
 
-  KeepSizeY := True;
   { WizardForm will not exist yet if we're being called from [Code]'s
     ExtractTemporaryFile in InitializeSetup }
-  FlipSizeAndCenterIfNeeded(Assigned(WizardForm), WizardForm, False);
+  FlipAndCenterIfNeeded(Assigned(WizardForm), WizardForm, False);
 end;
 
 function TNewDiskForm.GetSanitizedPath: String;

@@ -25,9 +25,14 @@ uses
   MD5, SHA1, SHA256, PathFunc, UnsignedFunc,
   Shared.FileClass, Shared.CommonFunc,
   ISPP.Sessions, ISPP.Consts, ISPP.Base, ISPP.IdentMan;
-  
+
+{$IFDEF WIN64}
+const
+  IsWin64 = True;
+{$ELSE}
 var
   IsWin64: Boolean;
+{$ENDIF}
 
 function PrependPath(const Ext: NativeInt; const Filename: String): String;
 begin
@@ -38,35 +43,29 @@ end;
 
 function CheckParams(const Params: IIsppFuncParams;
   Types: array of TIsppVarType; Minimum: Integer; var Error: TIsppFuncResult): Boolean;
-var
-  I: Integer;
 begin
   FillChar(Error, SizeOf(TIsppFuncResult), 0);
   Result := False;
-  if Params.GetCount < Minimum then
-  begin
+  if Params.GetCount < Minimum then begin
     Error.ErrParam := Minimum;
     Error.Error := ISPPFUNC_INSUFARGS;
     Exit;
-  end
-  else if Params.GetCount > (High(Types) + 1) then
-  begin
-    Error.ErrParam := High(Types) + 1;
+  end else if Params.GetCount > High(Types) + 1 then begin
+    Error.ErrParam := Integer(High(Types)) + 1;
     Error.Error := ISPPFUNC_MANYARGS;
     Exit;
-  end
-  else
+  end else
     with IInternalFuncParams(Params) do
-      for I := 0 to Params.GetCount - 1 do
+      for var I := 0 to Params.GetCount - 1 do
       begin
-        if (Types[I] = evSpecial) or (Get(I)^.Typ = evNull) then Continue;
-        if Types[I] <> Get(I)^.Typ then
-        begin
+        if (Types[I] = evSpecial) or (Get(I)^.Typ = evNull) then
+          Continue;
+        if Types[I] <> Get(I)^.Typ then begin
           if Types[I] = evStr then
             Error.Error := ISPPFUNC_STRWANTED
           else
             Error.Error := ISPPFUNC_INTWANTED;
-          Error.ErrParam := I;
+          Error.ErrParam := Integer(I);
           Exit;
         end;
       end;
@@ -246,11 +245,13 @@ end;
 function ReadReg(Ext: NativeInt; const Params: IIsppFuncParams;
   const FuncResult: IIsppFuncResult): TIsppFuncResult; stdcall;
 const
+  { These are based on CodeRootKey* from Shared.SetupTypes }
   ISPPRootKeyFlagMask  = $7F000000;
+  ISPPRootKeyFlag32Bit = $01000000;
   ISPPRootKeyFlag64Bit = $02000000;
-  ISPPRootKeyValidFlags = ISPPRootKeyFlag64Bit;
+  ISPPRootKeyValidFlags = ISPPRootKeyFlag32Bit or ISPPRootKeyFlag64Bit;
 
-  procedure CrackISPPRootKey(const ISPPRootKey: Int64; var RegView64: Boolean;
+  procedure CrackISPPRootKey(const ISPPRootKey: Int64; var RegView64, RegView32: Boolean;
     var RootKey: HKEY);
   begin
     { Allow only predefined key handles (8xxxxxxx). Can't accept handles to
@@ -260,30 +261,29 @@ const
        ((ISPPRootKey and ISPPRootKeyFlagMask) and not ISPPRootKeyValidFlags <> 0) then
       raise Exception.Create('Invalid root key value');
 
-    if ISPPRootKey and ISPPRootKeyFlag64Bit <> 0 then begin
-      if not IsWin64 then
-        raise Exception.Create('Cannot access 64-bit registry keys on this version of Windows');
-      RegView64 := True
-    end
-    else
-      RegView64 := False;
+    RegView64 := ISPPRootKey and ISPPRootKeyFlag64Bit <> 0;
+    if RegView64 and not IsWin64 then
+      raise Exception.Create('Cannot access 64-bit registry keys on this version of Windows');
+    RegView32 := ISPPRootKey and ISPPRootKeyFlag32Bit <> 0;
     RootKey := HKEY(ISPPRootKey and not ISPPRootKeyFlagMask);
   end;
 
 var
   Name: string;
   Default: TIsppVariant;
-  RegView64: Boolean;
+  RegView32, RegView64: Boolean;
   ARootKey: HKEY;
   AAccess: Cardinal;
 begin
   if CheckParams(Params, [evInt, evStr, evStr, evSpecial], 2, Result) then
   try
     with IInternalFuncParams(Params) do begin
-      CrackISPPRootKey(Get(0).AsInt64, RegView64, ARootKey);
+      CrackISPPRootKey(Get(0).AsInt64, RegView64, RegView32, ARootKey);
       AAccess := KEY_QUERY_VALUE;
       if RegView64 then
-        AAccess := AAccess or KEY_WOW64_64KEY;
+        AAccess := AAccess or KEY_WOW64_64KEY
+      else if RegView32 then
+        AAccess := AAccess or KEY_WOW64_32KEY;
       with TRegistry.Create(AAccess) do
       try
         RootKey := ARootKey;
@@ -507,122 +507,101 @@ end;
 {Find(<what>[,<contains>[,<what>,<contains>[,<what>[,<contains>]]]])}
 function FindLine(Ext: NativeInt; const Params: IIsppFuncParams;
   const FuncResult: IIsppFuncResult): TIsppFuncResult; stdcall;
+
+  type
+    TFindWhere = (fwMatch, fwBegin, fwEnd, fwContains);
+
+  function Meets(const Str, Substr: string; Sensitive: Boolean; Where: TFindWhere): Boolean;
+  begin
+    case Where of
+      fwMatch: Result := PathStrCompare(PChar(Str), Length(Str), PChar(Substr), Length(Substr), not Sensitive) = 0;
+      fwBegin: Result := PathStartsWith(Str, Substr, not Sensitive);
+      fwEnd: Result := PathEndsWith(Str, Substr, not Sensitive);
+      fwContains: Result := PathStrFind(PChar(Str), Length(Str), PChar(Substr), Length(Substr), not Sensitive) <> -1;
+    else
+      raise Exception.Create('FindLine Meets: invalid Where');
+    end;
+  end;
+
 const
   FIND_WHEREMASK  = $01 or $02;
   FIND_SENSITIVE  = $04;
   FIND_OR         = $08;
   FIND_NOT        = $10;
   FIND_TRIM       = $20;
-type
-  TFindWhere = (fwMatch, fwBegin, fwEnd, fwContains);
 var
-  I: Integer;
-  StartFromLine: Integer;
-  Found, MoreFound, Second, Third: Boolean;
-  Flags: array[0..2] of Integer;
   Strs: array[0..2] of string;
-  Str: string;
-
-  function Compare(const S1, S2: string; Sensitive: Boolean): Boolean;
-  begin
-    if Sensitive then
-      Result := AnsiCompareStr(S1, S2) = 0
-    else
-      Result := AnsiCompareText(S1, S2) = 0;
-  end;
-
-  function Contains(const Substr: string; Sensitive: Boolean): Boolean;
-  var
-    L, I: Integer;
-  begin
-    Result := True;
-    L := Length(Substr);
-    for I := 1 to Length(Str) - L + 1 do
-      if Compare(Substr, Copy(Str, I, L), Sensitive) then Exit;
-    Result := False;
-  end;
-
-  function Meets(const Substr: string; Sensitive: Boolean; Where: Integer): Boolean;
-  begin
-    Result := False;
-    case Where of
-      1: if Length(Substr) <= Length(Str) then
-            Result := Compare(Substr, Copy(Str, 1, Length(Substr)), Sensitive);
-      2: if Length(Substr) <= Length(Str) then
-            Result := Compare(Substr, Copy(Str, Length(Str) - Length(Substr) + 1, Length(Substr)), Sensitive);
-      3: if Length(Substr) <= Length(Str) then
-            Result := Contains(Substr, Sensitive);
-      else Result := Compare(Substr, Str, Sensitive);
-    end;
-  end;
-
+  StrCount: Integer;
+  Flags: array[0..2] of Integer;
 begin
   if CheckParams(Params, [evInt, evStr, evInt, evStr, evInt, evStr, evInt], 2, Result) then
   try
+    FillChar(Flags, SizeOf(Flags), 0);
+
     with IInternalFuncParams(Params) do
     begin
-      FillChar(Flags, SizeOf(Flags), 0);
+      var StartFromLine := Get(0).AsInteger;
+      if StartFromLine < 0 then
+        StartFromLine := 0;
+
       Strs[0] := Get(1).AsStr;
-      Second := False;
-      Third := False;
-      if GetCount > 2 then
-      begin
+      StrCount := 1;
+
+      if GetCount > 2 then begin
         Flags[0] := Get(2).AsInteger;
-        if GetCount > 3 then
-        begin
+        if GetCount > 3 then begin
           Strs[1] := Get(3).AsStr;
-          Second := True;
-          if GetCount > 4 then
-          begin
+          Inc(StrCount);
+          if GetCount > 4 then begin
             Flags[1] := Get(4).AsInteger;
-            if GetCount > 5 then
-            begin
+            if GetCount > 5 then begin
               Strs[2] := Get(5).AsStr;
-              Third := True;
-              if GetCount > 6 then Flags[2] := Get(6).AsInteger;
+              Inc(StrCount);
+              if GetCount > 6 then
+                Flags[2] := Get(6).AsInteger;
             end
           end;
         end
       end;
-      StartFromLine := Get(0).AsInteger;
-      if StartFromLine < 0 then StartFromLine := 0;
-      with TStringList(TPreprocessor(Ext).StringList) do
-        for I := StartFromLine to Count - 1 do
-        begin
-          Str := Strings[I];
-          if Flags[0] and FIND_TRIM <> 0 then
-            Str := Trim(Str);
-          Found := Meets(Strs[0], Flags[0] and FIND_SENSITIVE <> 0,
-            Flags[0] and FIND_WHEREMASK) xor (Flags[0] and FIND_NOT <> 0);
 
-          if Second and (((Flags[1] and FIND_OR <> 0{OR}) and not Found) or
-            ((Flags[1] and FIND_OR = 0{AND}) and Found)) then
-          begin
-            MoreFound := Meets(Strs[1], Flags[1] and FIND_SENSITIVE <> 0,
-              Flags[1] and FIND_WHEREMASK) xor (Flags[1] and FIND_NOT <> 0);
-            if Flags[1] and FIND_OR <> 0 then
-              Found := Found or MoreFound
-            else
-              Found := Found and MoreFound;
-          end;
+      const Lines = TPreprocessor(Ext).StringList;
 
-          if Third and (((Flags[2] and FIND_OR <> 0{OR}) and not Found) or
-            ((Flags[2] and FIND_OR = 0{AND}) and Found)) then
-          begin
-            MoreFound := Meets(Strs[2], Flags[2] and FIND_SENSITIVE <> 0,
-              Flags[2] and FIND_WHEREMASK) xor (Flags[2] and FIND_NOT <> 0);
-            if Flags[2] and FIND_OR <> 0 then
-              Found := Found or MoreFound
-            else
-              Found := Found and MoreFound;
-          end;
+      for var I := StartFromLine to Lines.Count-1 do begin
+        var Line := Lines[I];
+        if Flags[0] and FIND_TRIM <> 0 then
+          Line := Trim(Line);
 
-          if Found then
-          begin
-            MakeInt(ResPtr^, I);
-            Exit;
-          end;
+        var Found := Meets(Line, Strs[0], Flags[0] and FIND_SENSITIVE <> 0,
+          TFindWhere(Flags[0] and FIND_WHEREMASK)) xor (Flags[0] and FIND_NOT <> 0);
+
+        if (StrCount > 1) and
+           (((Flags[1] and FIND_OR <> 0{OR}) and not Found) or
+            ((Flags[1] and FIND_OR = 0{AND}) and Found)) then begin
+          const MoreFound = Meets(Line, Strs[1], Flags[1] and FIND_SENSITIVE <> 0,
+            TFindWhere(Flags[1] and FIND_WHEREMASK)) xor (Flags[1] and FIND_NOT <> 0);
+          if Flags[1] and FIND_OR <> 0 then
+            Found := Found or MoreFound
+          else
+            Found := Found and MoreFound;
         end;
+
+        if (StrCount > 2) and
+           (((Flags[2] and FIND_OR <> 0{OR}) and not Found) or
+            ((Flags[2] and FIND_OR = 0{AND}) and Found)) then begin
+          const MoreFound = Meets(Line, Strs[2], Flags[2] and FIND_SENSITIVE <> 0,
+            TFindWhere(Flags[2] and FIND_WHEREMASK)) xor (Flags[2] and FIND_NOT <> 0);
+          if Flags[2] and FIND_OR <> 0 then
+            Found := Found or MoreFound
+          else
+            Found := Found and MoreFound;
+        end;
+
+        if Found then begin
+          MakeInt(ResPtr^, I);
+          Exit;
+        end;
+      end;
+
       MakeInt(ResPtr^, -2);
     end;
   except
@@ -930,21 +909,12 @@ end;
 
 function RPosFunc(Ext: NativeInt; const Params: IIsppFuncParams;
   const FuncResult: IIsppFuncResult): TIsppFuncResult; stdcall;
-
-  function RPos(const Substr, S: string): Integer;
-  begin
-    for Result := Length(S) - Length(Substr) + 1 downto 1 do
-      if Copy(S, Result, Length(Substr)) = Substr then
-        Exit;
-    Result := 0;
-  end;
-
 begin
   if CheckParams(Params, [evStr, evStr], 2, Result) then
   try
     with IInternalFuncParams(Params) do
     begin
-      MakeInt(ResPtr^, RPos(Get(0).AsStr, Get(1).AsStr));
+      MakeInt(ResPtr^, Get(1).AsStr.LastIndexOf(Get(0).AsStr) + 1);
     end;
   except
     on E: Exception do
@@ -1580,15 +1550,17 @@ var
   NewDateSeparatorString, NewTimeSeparatorString: String;
   OldDateSeparator, OldTimeSeparator: Char;
 begin
-  if CheckParams(Params, [evStr, evStr, evStr], 3, Result) then
+  if CheckParams(Params, [evStr, evStr, evStr], 1, Result) then
   try
     with IInternalFuncParams(Params) do
     begin
       OldDateSeparator := FormatSettings.DateSeparator;
       OldTimeSeparator := FormatSettings.TimeSeparator;
       try
-        NewDateSeparatorString := Get(1).AsStr;
-        NewTimeSeparatorString := Get(2).AsStr;
+        if GetCount > 1 then
+          NewDateSeparatorString := Get(1).AsStr;
+        if GetCount > 2 then
+          NewTimeSeparatorString := Get(2).AsStr;
         if NewDateSeparatorString <> '' then
           FormatSettings.DateSeparator := NewDateSeparatorString[1];
         if NewTimeSeparatorString <> '' then
@@ -1615,15 +1587,17 @@ var
   OldDateSeparator, OldTimeSeparator: Char;
   Age: TDateTime;
 begin
-  if CheckParams(Params, [evStr, evStr, evStr, evStr], 4, Result) then
+  if CheckParams(Params, [evStr, evStr, evStr, evStr], 2, Result) then
   try
     with IInternalFuncParams(Params) do
     begin
       OldDateSeparator := FormatSettings.DateSeparator;
       OldTimeSeparator := FormatSettings.TimeSeparator;
       try
-        NewDateSeparatorString := Get(2).AsStr;
-        NewTimeSeparatorString := Get(3).AsStr;
+        if GetCount > 2 then
+          NewDateSeparatorString := Get(2).AsStr;
+        if GetCount > 3 then
+          NewTimeSeparatorString := Get(3).AsStr;
         if NewDateSeparatorString <> '' then
           FormatSettings.DateSeparator := NewDateSeparatorString[1];
         if NewTimeSeparatorString <> '' then
@@ -2000,6 +1974,42 @@ begin
   end;
 end;
 
+function SameStrFunc(Ext: NativeInt; const Params: IIsppFuncParams;
+  const FuncResult: IIsppFuncResult): TIsppFuncResult; stdcall;
+begin
+  if CheckParams(Params, [evStr, evStr], 2, Result) then
+  try
+    with IInternalFuncParams(Params) do
+    begin
+      MakeBool(ResPtr^, SameStr(Get(0).AsStr, Get(1).AsStr));
+    end;
+  except
+    on E: Exception do
+    begin
+      FuncResult.Error(PChar(E.Message));
+      Result.Error := ISPPFUNC_FAIL
+    end;
+  end;
+end;
+
+function Is64BitPEImageFunc(Ext: NativeInt; const Params: IIsppFuncParams;
+  const FuncResult: IIsppFuncResult): TIsppFuncResult; stdcall;
+begin
+  if CheckParams(Params, [evStr], 1, Result) then
+  try
+    with IInternalFuncParams(Params) do
+    begin
+      MakeBool(ResPtr^, Is64BitPEImage(Get(0).AsStr));
+    end;
+  except
+    on E: Exception do
+    begin
+      FuncResult.Error(PChar(E.Message));
+      Result.Error := ISPPFUNC_FAIL
+    end;
+  end;
+end;
+
 procedure RegisterFunctions(Preproc: TPreprocessor);
 begin
   with Preproc do
@@ -2068,9 +2078,13 @@ begin
     RegisterFunction('Message', MessageFunc, -1);
     RegisterFunction('Warning', WarningFunc, -1);
     RegisterFunction('Error', ErrorFunc, -1);
-    RegisterFunction('AddQuotes', AddQuotesFunc, -1)
+    RegisterFunction('AddQuotes', AddQuotesFunc, -1);
+    RegisterFunction('SameStr', SameStrFunc, -1);
+    RegisterFunction('Is64BitPEImage', Is64BitPEImageFunc, -1);
   end;
 end;
+
+{$IFNDEF WIN64}
 
 procedure InitIsWin64;
 var
@@ -2086,5 +2100,6 @@ end;
 initialization
   InitIsWin64;
 
-end.
+{$ENDIF}
 
+end.

@@ -12,7 +12,7 @@ unit ModernColors;
 interface
 
 uses
-  Graphics;
+  Vcl.Graphics;
 
 type
   TThemeType = (ttModernLight, ttModernDark, ttClassic);
@@ -29,13 +29,16 @@ type
     function FGetModern: Boolean;
     function FGetColor(Color: TThemeColor): TColor;
   public
-    property Colors[Color: TThemeColor]: TCOlor read FGetColor;
+    property Colors[Color: TThemeColor]: TColor read FGetColor;
     property Dark: Boolean read FGetDark;
     property Modern: Boolean read FGetModern;
     property Typ: TThemeType read FType write FType;
   end;
 
 implementation
+
+uses
+  Winapi.Windows;
 
 function TTheme.FGetColor(Color: TThemeColor): TColor;
 const
@@ -95,7 +98,6 @@ const
   LBlue = $0078D4;           { Azure DevOps }
   LOrange = $C55420;         { Azure DevOps }
   LPurple = $9262A8;         { Azure DevOps }
-  LYellow = $F2CB1D;         { Azure DevOps }
   LTeal = $2A8472;           { Visual Studio 2017 }
   LGray = $707070;           { Inno Setup 5 }
 
@@ -126,12 +128,9 @@ const
   
 begin
   Result := Colors[FType, Color];
-  if Result and $FF000000 = 0 then begin
+  if Result > 0 then begin { Same check as ColorToRGB }
     { Not a system color so change RGB to BGR as Delphi requires }
-    const R = (Result shr 16) and $FF;
-    const G = (Result shr 8) and $FF;
-    const B = Result and $FF;
-    Result := (B shl 16) or (G shl 8) or R;
+    Result := TColor(RGB(GetBValue(DWORD(Result)), GetGValue(DWORD(Result)), GetRValue(DWORD(Result))));
   end;
 end;
 

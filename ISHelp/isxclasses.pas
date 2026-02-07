@@ -22,7 +22,7 @@ TComponent = class(TPersistent)
   property ComponentState: Byte; read;
   property DesignInfo: Longint; read write;
   property Name: String; read write;
-  property Tag: Longint; read write;
+  property Tag: NativeInt; read write;
 end;
 
 TStrings = class(TPersistent)
@@ -68,9 +68,11 @@ TStream = class(TObject)
   property Size: Longint; read write;
 end;
 
+THandle = NativeUInt;
+
 THandleStream = class(TStream)
-  constructor Create(AHandle: Integer);
-  property Handle: Integer; read;
+  constructor Create(AHandle: THandle);
+  property Handle: THandle; read;
 end;
 
 TFileStream = class(THandleStream)
@@ -101,9 +103,11 @@ TColor = Integer;
 
 { TColor values: clBlack, clMaroon, clGreen, clOlive, clNavy, clPurple, clTeal, clGray, clSilver, clRed, clLime, clYellow, clBlue, clFuchsia, clAqua, clLtGray, clDkGray, clWhite, clNone, clDefault, clScrollBar, clBackground, clActiveCaption, clInactiveCaption, clMenu, clWindow, clWindowFrame, clMenuText, clWindowText, clCaptionText, clActiveBorder, clInactiveBorder, clAppWorkSpace, clHighlight, clHighlightText, clBtnFace, clBtnShadow, clGrayText, clBtnText, clInactiveCaptionText, clBtnHighlight, cl3DDkShadow, cl3DLight, clInfoText, clInfoBk, clHotLight }
 
+HFONT = NativeUint;
+
 TFont = class(TGraphicsObject)
   constructor Create;
-  property Handle: Integer; read;
+  property Handle: HFONT; read;
   property Color: TColor; read write;
   property Height: Integer; read write;
   property Name: String; read write;
@@ -125,6 +129,8 @@ TPen = class(TGraphicsObject)
   property Width: Integer; read write;
 end;
 
+HDC = NativeUInt;
+
 TCanvas = class(TPersistent)
   procedure Arc(X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer);
   procedure Chord(X1, Y1, X2, Y2, X3, Y3, X4, Y4: Integer);
@@ -140,7 +146,7 @@ TCanvas = class(TPersistent)
   function TextHeight(Text: String): Integer;
   procedure TextOut(X, Y: Integer; Text: String);
   function TextWidth(Text: String): Integer;
-  property Handle: Integer; read write;
+  property Handle: HDC; read write;
   property Pixels: Integer Integer Integer; read write;
   property Brush: TBrush; read;
   property CopyMode: Byte; read write;
@@ -160,7 +166,7 @@ end;
 
 TAlphaFormat = (afIgnored, afDefined, afPremultiplied);
 
-HBITMAP = Integer;
+HBITMAP = NativeUInt;
 
 TBitmap = class(TGraphic)
   procedure LoadFromStream(Stream: TStream);
@@ -217,10 +223,12 @@ TControl = class(TComponent)
   property StyleName: String; read write;
 end;
 
+HWND = NativeUInt;
+
 TWinControl = class(TControl)
   property Parent: TWinControl; read write;
   property ParentBackground: Boolean; read write;
-  property Handle: Longint; read write;
+  property Handle: HWND; read write;
   property Showing: Boolean; read;
   property TabOrder: Integer; read write;
   property TabStop: Boolean; read write;
@@ -368,6 +376,10 @@ TEdit = class(TCustomEdit)
 end;
 
 TNewEdit = class(TEdit)
+end;
+
+TNewPathEdit = class(TNewEdit)
+  property AutoCompleteFiles: Boolean; read write;
 end;
 
 TCustomMemo = class(TCustomEdit)
@@ -717,8 +729,8 @@ end;
 TNewNotebook = class(TWinControl)
   function FindNextPage(CurPage: TNewNotebookPage; GoForward: Boolean): TNewNotebookPage;
   property Anchors: TAnchors; read write;
-  property PageCount: Integer; read write;
-  property Pages[Index: Integer]: TNewNotebookPage; read;
+  property PageCount: NativeInt; read write;
+  property Pages[Index: NativeInt]: TNewNotebookPage; read;
   property ActivePage: TNewNotebookPage; read write;
 end;
 
@@ -740,7 +752,9 @@ TWizardPage = class(TComponent)
   property Surface: TNewNotebookPage; read;
   property SurfaceColor: TColor; read;
   property SurfaceHeight: Integer; read;
+  property SurfaceExtraHeight: Integer; read;
   property SurfaceWidth: Integer; read;
+  property SurfaceExtraWidth: Integer; read;
   property OnActivate: TWizardPageNotifyEvent; read write;
   property OnBackButtonClick: TWizardPageButtonEvent; read write;
   property OnCancelButtonClick: TWizardPageCancelEvent; read write;
@@ -749,11 +763,11 @@ TWizardPage = class(TComponent)
 end;
 
 TInputQueryWizardPage = class(TWizardPage)
-  function Add(const APrompt: String; const APassword: Boolean): Integer;
-  property Edits[Index: Integer]: TPasswordEdit; read;
-  property PromptLabels[Index: Integer]: TNewStaticText; read;
+  function Add(const APrompt: String; const APassword: Boolean): NativeInt;
+  property Edits[Index: NativeInt]: TPasswordEdit; read;
+  property PromptLabels[Index: NativeInt]: TNewStaticText; read;
   property SubCaptionLabel: TNewStaticText; read;
-  property Values[Index: Integer]: String; read write;
+  property Values[Index: NativeInt]: String; read write;
 end;
 
 TInputOptionWizardPage = class(TWizardPage)
@@ -766,23 +780,23 @@ TInputOptionWizardPage = class(TWizardPage)
 end;
 
 TInputDirWizardPage = class(TWizardPage)
-  function Add(const APrompt: String): Integer;
-  property Buttons[Index: Integer]: TNewButton; read;
-  property Edits[Index: Integer]: TEdit; read;
+  function Add(const APrompt: String): NativeInt;
+  property Buttons[Index: NativeInt]: TNewButton; read;
+  property Edits[Index: NativeInt]: TNewPathEdit; read;
   property NewFolderName: String; read write;
-  property PromptLabels[Index: Integer]: TNewStaticText; read;
+  property PromptLabels[Index: NativeInt]: TNewStaticText; read;
   property SubCaptionLabel: TNewStaticText; read;
-  property Values[Index: Integer]: String; read write;
+  property Values[Index: NativeInt]: String; read write;
 end;
 
 TInputFileWizardPage = class(TWizardPage)
-  function Add(const APrompt, AFilter, ADefaultExtension: String): Integer;
-  property Buttons[Index: Integer]: TNewButton; read;
-  property Edits[Index: Integer]: TEdit; read;
-  property PromptLabels[Index: Integer]: TNewStaticText; read;
+  function Add(const APrompt, AFilter, ADefaultExtension: String): NativeInt;
+  property Buttons[Index: NativeInt]: TNewButton; read;
+  property Edits[Index: NativeInt]: TNewPathEdit; read;
+  property PromptLabels[Index: NativeInt]: TNewStaticText; read;
   property SubCaptionLabel: TNewStaticText; read;
-  property Values[Index: Integer]: String; read write;
-  property IsSaveButton[Index: Integer]: Boolean; read write;
+  property Values[Index: NativeInt]: String; read write;
+  property IsSaveButton[Index: NativeInt]: Boolean; read write;
 end;
 
 TOutputMsgWizardPage = class(TWizardPage)
@@ -838,12 +852,15 @@ TSetupForm = class(TUIStateForm)
   function CalculateButtonWidth(const ButtonCaptions: array of String): Integer;
   function ShouldSizeX: Boolean;
   function ShouldSizeY: Boolean;
-  procedure FlipSizeAndCenterIfNeeded(const ACenterInsideControl: Boolean; const CenterInsideControlCtl: TWinControl; const CenterInsideControlInsideClientArea: Boolean);
+  procedure FlipAndCenterIfNeeded(const ACenterInsideControl: Boolean; const CenterInsideControlCtl: TWinControl; const CenterInsideControlInsideClientArea: Boolean);
+  property CenterOnShow: Boolean; read write;
   property ControlsFlipped: Boolean; read;
+  property GetExtraClientWidth: Integer; read;
+  property GetExtraClientHeight: Integer; read;
   property FlipControlsOnShow: Boolean; read write;
-  property KeepSizeY: Boolean; read; write;
+  property KeepSizeX: Boolean; read;
+  property KeepSizeY: Boolean; read;
   property RightToLeft: Boolean; read;
-  property SizeAndCenterOnShow: Boolean; read write;
 end;
 
 TWizardForm = class(TSetupForm)
@@ -868,7 +885,7 @@ TWizardForm = class(TSetupForm)
   property InstallingPage: TNewNotebookPage; read;
   property InfoAfterPage: TNewNotebookPage; read;
   property DiskSpaceLabel: TNewStaticText; read;
-  property DirEdit: TEdit; read;
+  property DirEdit: TNewPathEdit; read;
   property GroupEdit: TNewEdit; read;
   property NoIconsCheck: TNewCheckBox; read;
   property PasswordLabel: TNewStaticText; read;

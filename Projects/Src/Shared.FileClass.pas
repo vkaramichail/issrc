@@ -2,7 +2,7 @@ unit Shared.FileClass;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -31,8 +31,8 @@ type
     function GetPosition: Int64; virtual; abstract;
     function GetSize: Int64; virtual; abstract;
   public
-    class procedure RaiseError(ErrorCode: DWORD);
-    class procedure RaiseLastError;
+    class procedure RaiseError(ErrorCode: DWORD); static;
+    class procedure RaiseLastError; static;
     function Read(var Buffer; Count: Cardinal): Cardinal; virtual; abstract;
     procedure ReadBuffer(var Buffer; Count: Cardinal);
     procedure Seek(Offset: Int64); virtual; abstract;
@@ -141,7 +141,7 @@ type
   private
     FErrorCode: DWORD;
   public
-    property ErrorCode: DWORD read FErrorCode;
+    property ErrorCode: DWORD read FErrorCode write FErrorCode;
   end;
 
 implementation
@@ -167,17 +167,14 @@ begin
 end;
 
 class procedure TCustomFile.RaiseError(ErrorCode: DWORD);
-var
-  S: String;
-  E: EFileError;
 begin
-  S := Win32ErrorString(ErrorCode);
+  var S := Win32ErrorString(ErrorCode);
   if S = '' then begin
     { In case there was no text for the error code. Shouldn't get here under
       normal circumstances. }
     S := Format(SGenericIOError, [ErrorCode]);
   end;
-  E := EFileError.Create(S);
+  const E = EFileError.Create(S);
   E.FErrorCode := ErrorCode;
   raise E;
 end;
@@ -325,14 +322,14 @@ constructor TMemoryFile.CreateFromMemory(const ASource; const ASize: Cardinal);
 begin
   inherited Create;
   AllocMemory(ASize);
-  Move(ASource, FMemory^, NativeInt(FSize));
+  UMove(ASource, FMemory^, FSize);
 end;
 
 constructor TMemoryFile.CreateFromZero(const ASize: Cardinal);
 begin
   inherited Create;
   AllocMemory(ASize);
-  FillChar(FMemory^, NativeInt(FSize), 0);
+  UFillChar(FMemory^, FSize, 0);
 end;
 
 destructor TMemoryFile.Destroy;
@@ -344,11 +341,6 @@ end;
 
 procedure TMemoryFile.AllocMemory(const ASize: Cardinal);
 begin
-  { Limit size to the range of an Integer because the Move and FillChar
-    functions take 32-bit signed integers in 32-bit builds }
-  if ASize > Cardinal(High(Integer)) then
-    raise Exception.Create('TMemoryFile: Size limit exceeded');
-
   FMemory := Pointer(LocalAlloc(LMEM_FIXED, ASize));
   if FMemory = nil then
     OutOfMemoryError;
@@ -388,7 +380,7 @@ function TMemoryFile.Read(var Buffer; Count: Cardinal): Cardinal;
 begin
   Result := ClipCount(Count);
   if Result <> 0 then begin
-    Move((PByte(FMemory) + Cardinal(FPosition))^, Buffer, NativeInt(Result));
+    UMove((PByte(FMemory) + Cardinal(FPosition))^, Buffer, Result);
     Inc(FPosition, Result);
   end;
 end;
@@ -405,7 +397,7 @@ begin
   if ClipCount(Count) <> Count then
     RaiseError(ERROR_HANDLE_EOF);
   if Count <> 0 then begin
-    Move(Buffer, (PByte(FMemory) + Cardinal(FPosition))^, NativeInt(Count));
+    UMove(Buffer, (PByte(FMemory) + Cardinal(FPosition))^, Count);
     Inc(FPosition, Count);
   end;
 end;
@@ -470,7 +462,7 @@ begin
     if Integer(L + (I - FBufferOffset)) < 0 then
       OutOfMemoryError;
     SetLength(S, L + (I - FBufferOffset));
-    Move(FBuffer[FBufferOffset], S[L+1], NativeInt(I - FBufferOffset));
+    UMove(FBuffer[FBufferOffset], S[L+1], I - FBufferOffset);
     FBufferOffset := I;
 
     if FBufferOffset < FBufferSize then begin
@@ -640,23 +632,28 @@ var
   E: TObject;
 begin
   E := ExceptObject;
-  if (E is EExternalException) and
-     (EExternalException(E).ExceptionRecord.ExceptionCode = EXCEPTION_IN_PAGE_ERROR) and
-     (Cardinal(EExternalException(E).ExceptionRecord.NumberParameters) >= Cardinal(2)) and
-     (Cardinal(EExternalException(E).ExceptionRecord.ExceptionInformation[1]) >= Cardinal(FMemory)) and
-     (Cardinal(EExternalException(E).ExceptionRecord.ExceptionInformation[1]) < Cardinal(Cardinal(FMemory) + FMapSize)) then begin
-    { There should be a third parameter containing the NT status code of the error
-      condition that caused the exception. Convert that into a Win32 error code
-      and use it to generate our error message. }
-    if (Cardinal(EExternalException(E).ExceptionRecord.NumberParameters) >= Cardinal(3)) and
-       Assigned(_RtlNtStatusToDosError) then
-      TFile.RaiseError(_RtlNtStatusToDosError(NTSTATUS(EExternalException(E).ExceptionRecord.ExceptionInformation[2])))
-    else begin
-      { Use generic "The system cannot [read|write] to the specified device" errors }
-      if EExternalException(E).ExceptionRecord.ExceptionInformation[0] = 0 then
-        TFile.RaiseError(ERROR_READ_FAULT)
-      else
-        TFile.RaiseError(ERROR_WRITE_FAULT);
+  if E is EExternalException then begin
+    const ExceptionRecord = EExternalException(E).ExceptionRecord;
+    if (ExceptionRecord.ExceptionCode = EXCEPTION_IN_PAGE_ERROR) and
+       (Cardinal(ExceptionRecord.NumberParameters) >= Cardinal(2)) then begin
+      const MemoryStart: PByte = PByte(FMemory);
+      const MemoryEnd: PByte = MemoryStart + FMapSize;
+      const FaultAddress: PByte = PByte(ExceptionRecord.ExceptionInformation[1]);
+      if (FaultAddress >= MemoryStart) and (FaultAddress < MemoryEnd) then begin
+        { There should be a third parameter containing the NT status code of the error
+          condition that caused the exception. Convert that into a Win32 error code
+          and use it to generate our error message. }
+        if (Cardinal(ExceptionRecord.NumberParameters) >= Cardinal(3)) and
+           Assigned(_RtlNtStatusToDosError) then
+          TFile.RaiseError(_RtlNtStatusToDosError(NTSTATUS(ExceptionRecord.ExceptionInformation[2])))
+        else begin
+          { Use generic "The system cannot [read|write] to the specified device" errors }
+          if ExceptionRecord.ExceptionInformation[0] = 0 then
+            TFile.RaiseError(ERROR_READ_FAULT)
+          else
+            TFile.RaiseError(ERROR_WRITE_FAULT);
+        end;
+      end;
     end;
   end;
 end;

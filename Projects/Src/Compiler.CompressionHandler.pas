@@ -48,7 +48,7 @@ type
       const ACompressLevel: Integer; const ACompressorProps: TCompressorProps;
       const AUseEncryption: Boolean; const ACryptKey: TSetupEncryptionKey);
     procedure ProgressProc(BytesProcessed: Cardinal);
-    function ReserveBytesOnSlice(const Bytes: Cardinal): Boolean;
+    function ReserveBytesOnSlice(const Bytes: Int64): Boolean;
     procedure WriteProc(const Buf; BufSize: Cardinal);
     property ChunkBytesRead: Int64 read FChunkBytesRead;
     property ChunkBytesWritten: Int64 read FChunkBytesWritten;
@@ -75,11 +75,9 @@ begin
 end;
 
 destructor TCompressionHandler.Destroy;
-var
-  I: Integer;
 begin
   if Assigned(FCachedCompressors) then begin
-    for I := FCachedCompressors.Count-1 downto 0 do
+    for var I := FCachedCompressors.Count-1 downto 0 do
       TCustomCompressor(FCachedCompressors[I]).Free;
     FreeAndNil(FCachedCompressors);
   end;
@@ -150,7 +148,7 @@ begin
   end;
 end;
 
-function TCompressionHandler.ReserveBytesOnSlice(const Bytes: Cardinal): Boolean;
+function TCompressionHandler.ReserveBytesOnSlice(const Bytes: Int64): Boolean;
 begin
   if FSliceBytesLeft >= Bytes then begin
     Dec(FSliceBytesLeft, Bytes);
@@ -166,14 +164,13 @@ procedure TCompressionHandler.NewChunk(const ACompressorClass: TCustomCompressor
 
   procedure SelectCompressor;
   var
-    I: Integer;
     C: TCustomCompressor;
   begin
     { No current compressor, or changing compressor classes? }
     if (FCompressor = nil) or (FCompressor.ClassType <> ACompressorClass) then begin
       FCompressor := nil;
       { Search cache for requested class }
-      for I := FCachedCompressors.Count-1 downto 0 do begin
+      for var I := FCachedCompressors.Count-1 downto 0 do begin
         C := FCachedCompressors[I];
         if C.ClassType = ACompressorClass then begin
           FCompressor := C;
@@ -272,7 +269,7 @@ begin
     if FSliceBytesLeft = 0 then
       NewSlice('');
     if S > FSliceBytesLeft then
-      S := FSliceBytesLeft;
+      S := Cardinal(FSliceBytesLeft);
 
     if not FChunkEncrypted then
       FDestFile.WriteBuffer(P^, S)
@@ -289,7 +286,7 @@ begin
     end;
 
     Inc(FChunkBytesWritten, S);
-    Inc(Cardinal(P), S);
+    Inc(PByte(P), S);
     Dec(BufSize, S);
     Dec(FSliceBytesLeft, S);
   end;

@@ -66,7 +66,7 @@ type
   TActualParams = array of TVariable;
 
   IInternalFuncParams = interface(IIsppFuncParams)
-    function Get(Index: Integer): PIsppVariant;
+    function Get(Index: NativeInt): PIsppVariant;
     function ResPtr: PIsppVariant;
   end;
 
@@ -367,12 +367,9 @@ begin
 end;
 
 destructor TMacroCallContext.Destroy;
-var
-  I: Integer;
 begin
-  if Assigned(FLocalVars) then
-  begin
-    for I := 0 to FLocalVars.Count - 1 do
+  if Assigned(FLocalVars) then begin
+    for var I := 0 to FLocalVars.Count - 1 do
       Dispose(PIsppVariant(FLocalVars[I]));
     FLocalVars.Free;
   end;
@@ -599,11 +596,11 @@ type
     constructor Create(Sender: NativeInt; Func: PFunc);
     destructor Destroy; override;
     { IIsppFuncParams }
-    function Get(Index: Integer): IIsppFuncParam; stdcall;
-    function GetCount: Integer; stdcall;
+    function Get(Index: NativeInt): IIsppFuncParam; stdcall;
+    function GetCount: NativeInt; stdcall;
     { IInternalFuncParams }
     function IInternalFuncParams.Get = InternalGet;
-    function InternalGet(Index: Integer): PIsppVariant;
+    function InternalGet(Index: NativeInt): PIsppVariant;
     function ResPtr: PIsppVariant;
     { IIsppFuncResult }
     procedure SetAsInt(Value: Int64); stdcall;
@@ -668,17 +665,17 @@ begin
   raise Exception.Create(Message)
 end;
 
-function TFuncCallContext.Get(Index: Integer): IIsppFuncParam;
+function TFuncCallContext.Get(Index: NativeInt): IIsppFuncParam;
 begin
   Result := TFuncParam.Create(FParams[Index]);
 end;
 
-function TFuncCallContext.GetCount: Integer;
+function TFuncCallContext.GetCount: NativeInt;
 begin
   Result := FParams.Count
 end;
 
-function TFuncCallContext.InternalGet(Index: Integer): PIsppVariant;
+function TFuncCallContext.InternalGet(Index: NativeInt): PIsppVariant;
 begin
   Result := FParams[Index]
 end;
@@ -713,10 +710,8 @@ begin
 end;
 
 destructor TIdentManager.Destroy;
-var
-  I: Integer;
 begin
-  for I := 0 to FVarMan.Count - 1 do
+  for var I := 0 to FVarMan.Count - 1 do
     FreeItem(FVarMan[I]);
   FVarMan.Free;
 end;
@@ -727,7 +722,7 @@ begin
 end;
 
 procedure TIdentManager.DefineFunction(const Name: string;
-  Handler: TIsppFunction; Ext: Integer);
+  Handler: TIsppFunction; Ext: NativeInt);
 var
   F: PFunc;
 begin
@@ -746,18 +741,16 @@ procedure TIdentManager.DefineMacro(const Name, Expression: string;
   Params: array of TIsppMacroParam; Scope: TDefineScope);
 var
   P: PMacro;
-  ArrSize, I, J: Integer;
 begin
   if Scope = dsAny then Scope := dsPublic;
   Delete(Name, Scope);
-  ArrSize := SizeOf(TIsppMacroParam) * (Length(Params));
 
-  for I := 1 to High(Params) do
-    for J := 0 to I - 1 do
+  for var I := 1 to High(Params) do
+    for var J := 0 to I - 1 do
       if CompareText(Params[I].Name, Params[J].Name) = 0 then
         raise EIdentError.CreateFmt(SRedeclaredIdentifier, [Params[I].Name]);
 
-  P := AllocMem(SizeOf(TMacro) + ArrSize);
+  P := AllocMem(SizeOf(TMacro) + SizeOf(TIsppMacroParam) * Length(Params));
   try
     P^.Name := Name;
     P^.Hash := MakeHash(Name);
@@ -767,8 +760,8 @@ begin
     P^.Expression := Expression;
     P^.DeclPos := ExprPos;
     P^.ParserOptions := ParserOptions;
-    P^.ParamCount := Length(Params);
-    for I := 0 to High(Params) do
+    P^.ParamCount := Integer(Length(Params));
+    for var I := 0 to High(Params) do
       P^.Params[I] := Params[I];
     FVarMan.Add(P);
   except
@@ -912,7 +905,7 @@ begin
           else
               if IsProtected or (LocalLevel <> FLocalLevel) then Continue;
           end;
-      Result := I;
+      Result := Integer(I);
       Exit
     end;
 end;
@@ -1003,10 +996,8 @@ begin
 end;
 
 procedure TIdentManager.EndLocal;
-var
-  I: Integer;
 begin
-  for I := FVarMan.Count - 1 downto 0 do
+  for var I := FVarMan.Count - 1 downto 0 do
     if (PIdent(FVarMan.Items[I]).IdentType in [itVariable, itMacro]) and
       (PDefinable(FVarMan.Items[I]).Scope.LocalLevel = FLocalLevel) then
     begin
@@ -1050,15 +1041,13 @@ end;
 
 procedure TMacroCallContext.AdjustLocalArray(Index: Integer);
 var
-  I: Integer;
   V: PIsppVariant;
 begin
   if not Assigned(FLocalVars) then
     FLocalVars := TList.Create;
   if FLocalVars.Count > Index then Exit;
   VerboseMsg(10, SAllocatingMacroLocalArrayUpToEle, [FMacro.Name, Index]);
-  for I := FLocalVars.Count to Index do
-  begin
+  for var I := FLocalVars.Count to Index do begin
     New(V);
     V.Typ := evNull;
     FLocalVars.Add(V);

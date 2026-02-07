@@ -2,7 +2,7 @@ unit Compiler.ExeUpdateFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -15,13 +15,18 @@ uses
   Windows, SysUtils, Shared.FileClass, Shared.VerInfoFunc, Shared.Struct;
 
 type
-  TUpdateIconsAndStyleFile = (uisfSetupE32, uisfSetupCustomStyleE32, uisfSetupLdrE32);
+  TUpdateIconsAndStyleFile = (uisfSetup, uisfSetupCustomStyle, uisfSetupLdr);
   TUpdateIconsAndStyleOperation = (uisoIcoFileName, uisoWizardDarkStyle, uisoStyleFileName, uisoStyleFileNameDynamicDark, uisoDone);
   TOnUpdateIconsAndStyle = procedure(const Operation: TUpdateIconsAndStyleOperation) of object;
 
+  EResUpdateError = class(Exception)
+  private
+    FErrorCode: DWORD;
+  public
+    property ErrorCode: DWORD read FErrorCode;
+  end;
+
 function ReadSignatureAndChecksumFields(const F: TCustomFile;
-  var ASignatureAddress, ASignatureSize, AChecksum: DWORD): Boolean;
-function ReadSignatureAndChecksumFields64(const F: TCustomFile;
   var ASignatureAddress, ASignatureSize, AChecksum: DWORD): Boolean;
 function SeekToResourceData(const F: TCustomFile; const ResType, ResId: Cardinal): Cardinal;
 function UpdateSignatureAndChecksumFields(const F: TCustomFile;
@@ -42,7 +47,8 @@ procedure PreventCOMCTL32Sideloading(const F: TCustomFile);
 implementation
 
 uses
-  Math;
+  Math,
+  UnsignedFunc;
 
 const
   IMAGE_NT_SIGNATURE = $00004550;
@@ -69,6 +75,7 @@ type
     VirtualAddress: DWORD;
     Size: DWORD;
   end;
+  TDataDirectory = packed array[0..IMAGE_NUMBEROF_DIRECTORY_ENTRIES-1] of TImageDataDirectory;
   PImageOptionalHeader = ^TImageOptionalHeader;
   TImageOptionalHeader = packed record
     { Standard fields. }
@@ -103,7 +110,7 @@ type
     SizeOfHeapCommit: DWORD;
     LoaderFlags: DWORD;
     NumberOfRvaAndSizes: DWORD;
-    DataDirectory: packed array[0..IMAGE_NUMBEROF_DIRECTORY_ENTRIES-1] of TImageDataDirectory;
+    DataDirectory: TDataDirectory;
   end;
   PImageOptionalHeader64 = ^TImageOptionalHeader64;
   TImageOptionalHeader64 = packed record
@@ -138,7 +145,7 @@ type
     SizeOfHeapCommit: Int64;
     LoaderFlags: DWORD;
     NumberOfRvaAndSizes: DWORD;
-    DataDirectory: packed array[0..IMAGE_NUMBEROF_DIRECTORY_ENTRIES-1] of TImageDataDirectory;
+    DataDirectory: TDataDirectory;
   end;
   TISHMisc = packed record
     case Integer of
@@ -204,36 +211,29 @@ begin
   end;
 end;
 
-function SeekToAndReadPEOptionalHeader(const F: TCustomFile;
-  var OptHeader: TImageOptionalHeader; var OptHeaderOffset: Int64): Boolean;
-var
-  Header: TImageFileHeader;
-begin
-  Result := False;
-  if SeekToPEHeader(F) then begin
-    if (F.Read(Header, SizeOf(Header)) = SizeOf(Header)) and
-       (Header.SizeOfOptionalHeader = SizeOf(OptHeader)) then begin
-      OptHeaderOffset := F.Position;
-      if F.Read(OptHeader, SizeOf(OptHeader)) = SizeOf(OptHeader) then
-        if OptHeader.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC then
-          Result := True;
-    end;
-  end;
-end;
+type
+  TOptionalHeader = (ohNone, oh32, oh64);
 
-function SeekToAndReadPEOptionalHeader64(const F: TCustomFile;
-  var OptHeader: TImageOptionalHeader64; var OptHeaderOffset: Int64): Boolean;
-var
-  Header: TImageFileHeader;
+function SeekToAndReadPEOptionalHeader(const F: TCustomFile;
+  var OptHeader32: TImageOptionalHeader; var OptHeader64: TImageOptionalHeader64;
+  var OptHeaderOffset: Int64): TOptionalHeader;
 begin
-  Result := False;
+  Result := ohNone;
   if SeekToPEHeader(F) then begin
+    var Header: TImageFileHeader;
     if (F.Read(Header, SizeOf(Header)) = SizeOf(Header)) and
-       (Header.SizeOfOptionalHeader = SizeOf(OptHeader)) then begin
+       ((Header.SizeOfOptionalHeader = SizeOf(OptHeader32)) or
+        (Header.SizeOfOptionalHeader = SizeOf(OptHeader64))) then begin
       OptHeaderOffset := F.Position;
-      if F.Read(OptHeader, SizeOf(OptHeader)) = SizeOf(OptHeader) then
-        if OptHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC then
-          Result := True;
+      if Header.SizeOfOptionalHeader = SizeOf(OptHeader32) then begin
+        if (F.Read(OptHeader32, SizeOf(OptHeader32)) = SizeOf(OptHeader32)) and
+           (OptHeader32.Magic = IMAGE_NT_OPTIONAL_HDR32_MAGIC) then
+          Result := oh32;
+      end else begin
+        if (F.Read(OptHeader64, SizeOf(OptHeader64)) = SizeOf(OptHeader64)) and
+           (OptHeader64.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC) then
+          Result := oh64;
+      end;
     end;
   end;
 end;
@@ -245,6 +245,7 @@ var
   PEHeaderOffset, PESig: Cardinal;
   PEHeader: TImageFileHeader;
   PEOptHeader: TImageOptionalHeader;
+  PEOptHeader64: TImageOptionalHeader64;
   PESectionHeader: TImageSectionHeader;
   I: Integer;
 begin
@@ -264,17 +265,29 @@ begin
   if PESig <> $00004550 {'PE'#0#0} then
     Error('File isn''t a PE file (2)');
   F.ReadBuffer(PEHeader, SizeOf(PEHeader));
-  if PEHeader.SizeOfOptionalHeader <> SizeOf(PEOptHeader) then
+  const PE32 = PEHeader.SizeOfOptionalHeader = SizeOf(PEOptHeader);
+  const PE32Plus = PEHeader.SizeOfOptionalHeader = SizeOf(PEOptHeader64);
+  if not PE32 and not PE32Plus then
     Error('File isn''t a PE file (3)');
-  F.ReadBuffer(PEOptHeader, SizeOf(PEOptHeader));
-  if PEOptHeader.Magic <> IMAGE_NT_OPTIONAL_HDR32_MAGIC then
-    Error('File isn''t a PE file (4)');
+
+  var DataDirectory: TDataDirectory;
+  if PE32 then begin
+    F.ReadBuffer(PEOptHeader, SizeOf(PEOptHeader));
+    if PEOptHeader.Magic <> IMAGE_NT_OPTIONAL_HDR32_MAGIC then
+      Error('File isn''t a PE file (4)');
+    DataDirectory := PEOptHeader.DataDirectory;
+  end else begin
+    F.ReadBuffer(PEOptHeader64, SizeOf(PEOptHeader64));
+    if PEOptHeader64.Magic <> IMAGE_NT_OPTIONAL_HDR64_MAGIC then
+      Error('File isn''t a PE file (5)');
+    DataDirectory := PEOptHeader64.DataDirectory;
+  end;
 
   { Scan section headers for resource section }
-  if (PEOptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress = 0) or
-     (PEOptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].Size = 0) then
+  if (DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress = 0) or
+     (DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].Size = 0) then
     Error('No resources (1)');
-  SectionVirtualAddr := PEOptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
+  SectionVirtualAddr := DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE].VirtualAddress;
   SectionPhysOffset := 0;
   for I := 0 to PEHeader.NumberOfSections-1 do begin
     F.ReadBuffer(PESectionHeader, SizeOf(PESectionHeader));
@@ -350,91 +363,98 @@ end;
 function ReadSignatureAndChecksumFields(const F: TCustomFile;
   var ASignatureAddress, ASignatureSize, AChecksum: DWORD): Boolean;
 { Reads the signature and checksum fields in the specified file's header.
-  If the file is not a valid PE32 executable, False is returned. }
-var
-  OptHeader: TImageOptionalHeader;
-  OptHeaderOffset: Int64;
+  If the file is not a valid PE32 or PE32+ executable, False is returned. }
 begin
-  Result := SeekToAndReadPEOptionalHeader(F, OptHeader, OptHeaderOffset);
+  var OptHeader32: TImageOptionalHeader;
+  var OptHeader64: TImageOptionalHeader64;
+  var OptHeaderOffset: Int64;
+  const OptHeader = SeekToAndReadPEOptionalHeader(F, OptHeader32, OptHeader64, OptHeaderOffset);
+  Result := OptHeader <> ohNone;
   if Result then begin
-    ASignatureAddress := OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-    ASignatureSize := OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-    AChecksum := OptHeader.CheckSum;
-  end;
-end;
-
-function ReadSignatureAndChecksumFields64(const F: TCustomFile;
-  var ASignatureAddress, ASignatureSize, AChecksum: DWORD): Boolean;
-{ Reads the signature and checksum fields in the specified file's header.
-  If the file is not a valid PE32+ executable, False is returned. }
-var
-  OptHeader: TImageOptionalHeader64;
-  OptHeaderOffset: Int64;
-begin
-  Result := SeekToAndReadPEOptionalHeader64(F, OptHeader, OptHeaderOffset);
-  if Result then begin
-    ASignatureAddress := OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
-    ASignatureSize := OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-    AChecksum := OptHeader.CheckSum;
+    if OptHeader = oh32 then begin
+      ASignatureAddress := OptHeader32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+      ASignatureSize := OptHeader32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+      AChecksum := OptHeader32.CheckSum;
+    end else begin
+      ASignatureAddress := OptHeader64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress;
+      ASignatureSize := OptHeader64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
+      AChecksum := OptHeader64.CheckSum;
+    end;
   end;
 end;
 
 function UpdateSignatureAndChecksumFields(const F: TCustomFile;
   const ASignatureAddress, ASignatureSize, AChecksum: DWORD): Boolean;
 { Sets the signature and checksum fields in the specified file's header.
-  If the file is not a valid PE32 executable, False is returned. }
-var
-  OptHeader: TImageOptionalHeader;
-  OptHeaderOffset: Int64;
+  If the file is not a valid PE32 or PE32+ executable, False is returned. }
 begin
-  Result := SeekToAndReadPEOptionalHeader(F, OptHeader, OptHeaderOffset);
+  var OptHeader32: TImageOptionalHeader;
+  var OptHeader64: TImageOptionalHeader64;
+  var OptHeaderOffset: Int64;
+  const OptHeader = SeekToAndReadPEOptionalHeader(F, OptHeader32, OptHeader64, OptHeaderOffset);
+  Result := OptHeader <> ohNone;
   if Result then begin
-    OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress := ASignatureAddress;
-    OptHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size := ASignatureSize;
-    OptHeader.CheckSum := AChecksum;
     F.Seek(OptHeaderOffset);
-    F.WriteBuffer(OptHeader, SizeOf(OptHeader));
+    if OptHeader = oh32 then begin
+      OptHeader32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress := ASignatureAddress;
+      OptHeader32.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size := ASignatureSize;
+      OptHeader32.CheckSum := AChecksum;
+      F.WriteBuffer(OptHeader32, SizeOf(OptHeader32));
+    end else begin
+      OptHeader64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].VirtualAddress := ASignatureAddress;
+      OptHeader64.DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY].Size := ASignatureSize;
+      OptHeader64.CheckSum := AChecksum;
+      F.WriteBuffer(OptHeader64, SizeOf(OptHeader64));
+    end;
   end;
 end;
 
 procedure UpdateSetupPEHeaderFields(const F: TCustomFile;
   const IsTSAware, IsDEPCompatible, IsASLRCompatible: Boolean);
 const
+  IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA = $0020;
   IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = $0040;
   IMAGE_DLLCHARACTERISTICS_NX_COMPAT = $0100;
   IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE = $8000;
-  OffsetOfDllCharacteristics = $46;
+  OffsetOfDllCharacteristics = $46; { Valid for both PE32 and PE32+ }
 var
   Header: TImageFileHeader;
   OptMagic, DllChars, OrigDllChars: Word;
 begin
   if SeekToPEHeader(F) then begin
-    if (F.Read(Header, SizeOf(Header)) = SizeOf(Header)) and
-       (Header.SizeOfOptionalHeader = SizeOf(TImageOptionalHeader)) then begin
-      const Ofs = F.Position;
-      if (F.Read(OptMagic, SizeOf(OptMagic)) = SizeOf(OptMagic)) and
-         (OptMagic = IMAGE_NT_OPTIONAL_HDR32_MAGIC) then begin
-        { Update DllCharacteristics }
-        F.Seek(Ofs + OffsetOfDllCharacteristics);
-        if F.Read(DllChars, SizeOf(DllChars)) = SizeOf(DllChars) then begin
-          OrigDllChars := DllChars;
-          if IsTSAware then
-            DllChars := DllChars or IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
-          else
-            DllChars := DllChars and not IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE;
-          if IsDEPCompatible then
-            DllChars := DllChars or IMAGE_DLLCHARACTERISTICS_NX_COMPAT
-          else
-            DllChars := DllChars and not IMAGE_DLLCHARACTERISTICS_NX_COMPAT;
-          if IsASLRCompatible then
-            DllChars := DllChars or IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
-          else
-            DllChars := DllChars and not IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
-          if DllChars <> OrigDllChars then begin
-            F.Seek(Ofs + OffsetOfDllCharacteristics);
-            F.WriteBuffer(DllChars, SizeOf(DllChars));
+    if (F.Read(Header, SizeOf(Header)) = SizeOf(Header)) then begin
+      const PE32 = Header.SizeOfOptionalHeader = SizeOf(TImageOptionalHeader);
+      const PE32Plus = Header.SizeOfOptionalHeader = SizeOf(TImageOptionalHeader64);
+      if PE32 or PE32Plus then begin
+        const Ofs = F.Position;
+        if (F.Read(OptMagic, SizeOf(OptMagic)) = SizeOf(OptMagic)) and
+           ((PE32 and (OptMagic = IMAGE_NT_OPTIONAL_HDR32_MAGIC)) or
+            (PE32Plus and (OptMagic = IMAGE_NT_OPTIONAL_HDR64_MAGIC))) then begin
+          { Update DllCharacteristics }
+          F.Seek(Ofs + OffsetOfDllCharacteristics);
+          if F.Read(DllChars, SizeOf(DllChars)) = SizeOf(DllChars) then begin
+            OrigDllChars := DllChars;
+            if IsTSAware then
+              DllChars := DllChars or IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE
+            else
+              DllChars := Word(DllChars and not IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE);
+            if IsDEPCompatible then
+              DllChars := DllChars or IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+            else
+              DllChars := Word(DllChars and not IMAGE_DLLCHARACTERISTICS_NX_COMPAT);
+            var ASLRFlags: Word := IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+            if Header.Machine = IMAGE_FILE_MACHINE_AMD64 then
+              ASLRFlags := ASLRFlags or IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA;
+            if IsASLRCompatible then
+              DllChars := DllChars or ASLRFlags
+            else
+              DllChars := DllChars and not ASLRFlags;
+            if DllChars <> OrigDllChars then begin
+              F.Seek(Ofs + OffsetOfDllCharacteristics);
+              F.WriteBuffer(DllChars, SizeOf(DllChars));
+            end;
+            Exit;
           end;
-          Exit;
         end;
       end;
     end;
@@ -442,17 +462,23 @@ begin
   raise Exception.Create('UpdateSetupPEHeaderFields failed');
 end;
 
-procedure ResUpdateError(const Msg: String; const ResourceName: String = '');
+procedure ResUpdateError(const Msg: String; const ResourceName: String = ''; const ErrorCode: DWORD = ERROR_INVALID_DATA);
 begin
+  var S: String;
   if ResourceName <> '' then
-    raise Exception.CreateFmt('Resource %s update error: %s', [ResourceName, Msg])
+    S := Format('Resource %s update error: %s', [ResourceName, Msg])
   else
-    raise Exception.CreateFmt('Resource update error: %s', [Msg]);
+    S := Format('Resource update error: %s', [Msg]);
+
+  const E = EResUpdateError.Create(S);
+  E.FErrorCode := ErrorCode;
+  raise E;
 end;
 
 procedure ResUpdateErrorWithLastError(const Msg: String; const ResourceName: String = '');
 begin
-  ResUpdateError(Msg + ' (' + IntToStr(GetLastError) + ')', ResourceName);
+  const ErrorCode = GetLastError;
+  ResUpdateError(Msg + ' (' + IntToStr(ErrorCode) + ')', ResourceName, ErrorCode);
 end;
 
 procedure UpdateVersionInfo(const F: TCustomFile;
@@ -486,8 +512,8 @@ procedure UpdateVersionInfo(const F: TCustomFile;
 
   procedure BumpToDWordBoundary(var P: Pointer);
   begin
-    if Cardinal(P) and 3 <> 0 then
-      Cardinal(P) := (Cardinal(P) or 3) + 1;
+    if NativeUInt(P) and 3 <> 0 then
+      NativeUInt(P) := (NativeUInt(P) or 3) + 1;
   end;
 
   function QueryValue(P: Pointer; Path: PWideChar; var Buf: Pointer;
@@ -497,7 +523,7 @@ procedure UpdateVersionInfo(const F: TCustomFile;
     ValueLength: Cardinal;
   begin
     Result := False;
-    Cardinal(EndP) := Cardinal(P) + PWord(P)^;
+    EndP := PByte(P) + PWord(P)^;
     Inc(PWord(P));
     ValueLength := PWord(P)^;
     Inc(PWord(P));
@@ -519,13 +545,13 @@ procedure UpdateVersionInfo(const F: TCustomFile;
           Borland's, wrongly set ValueLength to a *character* count on string
           nodes. But since we never try to query for a child of a string node,
           that doesn't matter here. }
-        Inc(Cardinal(P), ValueLength);
+        Inc(PByte(P), ValueLength);
         BumpToDWordBoundary(P);
-        while Cardinal(P) < Cardinal(EndP) do begin
+        while PByte(P) < PByte(EndP) do begin
           Result := QueryValue(P, Path, Buf, BufLen);
           if Result then
             Exit;
-          Inc(Cardinal(P), PWord(P)^);
+          Inc(PByte(P), PWord(P)^);
           BumpToDWordBoundary(P);
         end;
       end;
@@ -612,16 +638,16 @@ begin
   end;
 end;
 
-function EnumLangsFunc(hModule: Cardinal; lpType, lpName: PAnsiChar; wLanguage: Word; lParam: Integer): BOOL; stdcall;
+function EnumLangsFunc(M: HMODULE; lpType, lpName: PAnsiChar; wLanguage: Word; lParam: IntPtr): BOOL; stdcall;
 begin
   PWord(lParam)^ := wLanguage;
   Result := False;
 end;
 
-function GetResourceLanguage(hModule: Cardinal; lpType, lpName: PChar; var wLanguage: Word): Boolean;
+function GetResourceLanguage(M: HMODULE; lpType, lpName: PChar; var wLanguage: Word): Boolean;
 begin
   wLanguage := 0;
-  EnumResourceLanguages(hModule, lpType, lpName, @EnumLangsFunc, Integer(@wLanguage));
+  EnumResourceLanguages(M, lpType, lpName, @EnumLangsFunc, IntPtr(@wLanguage));
   Result := True;
 end;
 
@@ -676,7 +702,7 @@ type
     try
       const N = F.CappedSize;
       if Cardinal(N) > Cardinal($100000) then  { sanity check }
-        ResUpdateError('File is too large');
+        ResUpdateError('File is too large', '', ERROR_INVALID_PARAMETER);
       GetMem(P, N);
       F.ReadBuffer(P^, N);
       Result := N;
@@ -827,9 +853,14 @@ type
     var StyleName: PChar := nil;
     if SameText(StyleFileName, 'builtin:polar') then begin
       if Dark then
-        StyleName := 'POLAR_DARK'
+        StyleName := 'WINDOWSPOLARDARK'
       else
-        StyleName := 'POLAR_LIGHT';
+        StyleName := 'WINDOWSPOLARLIGHT';
+    end else if SameText(StyleFileName, 'builtin:windows11') then begin
+      if Dark then
+        StyleName := 'WINDOWSMODERNDARK'
+      else
+        StyleName := 'WINDOWSMODERNLIGHT';
     end else if SameText(StyleFileName, 'builtin:slate') then
       StyleName := 'SLATECLASSICO'
     else if SameText(StyleFileName, 'builtin:zircon') then
@@ -844,7 +875,6 @@ var
   M: HMODULE;
   OldGroupIconDir, NewGroupIconDir: PGroupIconDir;
   I: Integer;
-  NewGroupIconDirSize: LongInt;
 begin
   var Ico: PIcoHeader := nil;
   var Vsf := nil;
@@ -863,7 +893,7 @@ begin
 
       { Ensure the icon is valid }
       if not IsValidIcon(Ico, IcoSize) then
-        ResUpdateError('Icon file is invalid');
+        ResUpdateError('Icon file is invalid', '', ERROR_INVALID_PARAMETER);
     end;
 
     { Update the resources }
@@ -909,7 +939,7 @@ begin
           DeleteIconIfExists(H, M, PChar(ResourceName + '_DARK'));
 
           { Build the new group icon resource }
-          NewGroupIconDirSize := 3*SizeOf(Word)+Ico.ItemCount*SizeOf(TGroupIconDirItem);
+          const NewGroupIconDirSize: DWORD = 3*SizeOf(Word)+Ico.ItemCount*SizeOf(TGroupIconDirItem);
           GetMem(NewGroupIconDir, NewGroupIconDirSize);
           try
             { Build the new group icon resource }
@@ -918,17 +948,20 @@ begin
             NewGroupIconDir.ItemCount := Ico.ItemCount;
             for I := 0 to NewGroupIconDir.ItemCount-1 do begin
               NewGroupIconDir.Items[I].Header := Ico.Items[I].Header;
-              NewGroupIconDir.Items[I].Id := I+100; //start at 100 to avoid overwriting other icons that may exist
+              const Id = I+100; //start at 100 to avoid overwriting other icons that may exist
+              if Id > High(Word) then
+                ResUpdateErrorWithLastError('UpdateResource failed (7)', ResourceName);
+              NewGroupIconDir.Items[I].Id := Word(Id);
             end;
 
             { Update 'MAINICON' }
             for I := 0 to NewGroupIconDir.ItemCount-1 do
-              if not UpdateResource(H, RT_ICON, MakeIntResource(NewGroupIconDir.Items[I].Id), 1033, Pointer(DWORD(Ico) + Ico.Items[I].Offset), Ico.Items[I].Header.ImageSize) then
-                ResUpdateErrorWithLastError('UpdateResource failed (7)', ResourceName);
+              if not UpdateResource(H, RT_ICON, MakeIntResource(NewGroupIconDir.Items[I].Id), 1033, Pointer(PByte(Ico) + Ico.Items[I].Offset), Ico.Items[I].Header.ImageSize) then
+                ResUpdateErrorWithLastError('UpdateResource failed (8)', ResourceName);
 
             { Update the icons }
             if not UpdateResource(H, RT_GROUP_ICON, 'MAINICON', 1033, NewGroupIconDir, NewGroupIconDirSize) then
-              ResUpdateErrorWithLastError('UpdateResource failed (8)', ResourceName);
+              ResUpdateErrorWithLastError('UpdateResource failed (9)', ResourceName);
 
             ChangedMainIcon := True;
           finally
@@ -948,7 +981,7 @@ begin
           end; { Else keep both main icons }
         end;
 
-        if Uisf in [uisfSetupE32, uisfSetupCustomStyleE32] then begin
+        if Uisf in [uisfSetup, uisfSetupCustomStyle] then begin
           const DeleteUninstallIcon = IcoFileName <> '';
           if DeleteUninstallIcon then begin
             TriggerOnUpdateIconsAndStyle(uisoIcoFileName);
@@ -964,75 +997,50 @@ begin
             if WizardDarkStyle = wdsLight then
               Postfix := '_DARK';
             { Delete the icons we don't need: either the light ones or the dark ones }
-            DeleteIconIfExists(H, M, PChar('Z_DIRICON' + Postfix));
-            DeleteIconIfExists(H, M, PChar('Z_DISKICON' + Postfix));
             DeleteIconIfExists(H, M, PChar('Z_GROUPICON' + Postfix));
-            DeleteIconIfExists(H, M, PChar('Z_STOPICON' + Postfix));
             if not DeleteUninstallIcon then
               DeleteIconIfExists(H, M, PChar('Z_UNINSTALLICON' + Postfix));
           end;
 
-          if Uisf = uisfSetupCustomStyleE32 then begin
-            var HasLightStyle := False;
-            var HasDarkStyle := False;
-
+          if Uisf = uisfSetupCustomStyle then begin
             if Vsf <> nil then begin
               TriggerOnUpdateIconsAndStyle(uisoStyleFileName);
               { Add the regular custom style, used by forced light, forced dark and dynamic light }
               if not UpdateResource(H, 'VCLSTYLE', 'MYSTYLE1', 1033, Vsf, VsfSize) then
-                ResUpdateErrorWithLastError('UpdateResource failed (9)', 'MYSTYLE1');
-              if WizardDarkStyle <> wdsDark then
-                HasLightStyle := True
-              else
-                HasDarkStyle := True;
+                ResUpdateErrorWithLastError('UpdateResource failed (10)', 'MYSTYLE1');
             end;
 
             if VsfDynamicDark <> nil then begin
               TriggerOnUpdateIconsAndStyle(uisoStyleFileNameDynamicDark);
               { Add the dark custom style, used by dynamic dark only }
               if not UpdateResource(H, 'VCLSTYLE', 'MYSTYLE1_DARK', 1033, VsfDynamicDark, VsfSizeDynamicDark) then
-                ResUpdateErrorWithLastError('UpdateResource failed (10)', 'MYSTYLE1_DARK');
-              HasDarkStyle := True;
+                ResUpdateErrorWithLastError('UpdateResource failed (11)', 'MYSTYLE1_DARK');
             end;
 
             { See if we need to keep the built-in dark style }
             if (Vsf = nil) and (WizardDarkStyle = wdsDark) then begin
               TriggerOnUpdateIconsAndStyle(uisoWizardDarkStyle);
               { Forced dark without a custom style: make the built-in dark style the regular one }
-              RenameResource(H, M, 'VCLSTYLE', 'BUILTIN_DARK', 'MYSTYLE1');
-              HasDarkStyle := True;
+              RenameResource(H, M, 'VCLSTYLE', 'WINDOWSMODERNDARK', 'MYSTYLE1');
             end else if (VsfDynamicDark = nil) and (WizardDarkStyle = wdsDynamic) then begin
               TriggerOnUpdateIconsAndStyle(uisoWizardDarkStyle);
               { Dynamic without a custom dark style: make the built-in dark style the dark one }
-              RenameResource(H, M, 'VCLSTYLE', 'BUILTIN_DARK', 'MYSTYLE1_DARK');
-              HasDarkStyle := True;
+              RenameResource(H, M, 'VCLSTYLE', 'WINDOWSMODERNDARK', 'MYSTYLE1_DARK');
             end else begin
               TriggerOnUpdateIconsAndStyle(uisoWizardDarkStyle);
               { Forced dark with a custom style: delete the built-in dark style
                 Or, dynamic with a custom dark style: same
                 Or, forced light with or without a custom style: same
-                Note: forced light without a custom style doesn't actually use SetupCustomStyle.e32 at the moment so won't get here }
-              DeleteResource(H, M, 'VCLSTYLE', 'BUILTIN_DARK');
+                Note: forced light without a custom style doesn't actually use SetupCustomStyle.e32/64 at the moment so won't get here }
+              DeleteResource(H, M, 'VCLSTYLE', 'WINDOWSMODERNDARK');
             end;
 
             { Delete additional styles - they are handled above }
-            DeleteResource(H, M, 'VCLSTYLE', 'POLAR_LIGHT');
-            DeleteResource(H, M, 'VCLSTYLE', 'POLAR_DARK');
+            DeleteResource(H, M, 'VCLSTYLE', 'WINDOWSMODERNLIGHT');
+            DeleteResource(H, M, 'VCLSTYLE', 'WINDOWSPOLARLIGHT');
+            DeleteResource(H, M, 'VCLSTYLE', 'WINDOWSPOLARDARK');
             DeleteResource(H, M, 'VCLSTYLE', 'SLATECLASSICO');
             DeleteResource(H, M, 'VCLSTYLE', 'ZIRCON');
-
-            { Delete taskform icons we don't need }
-            TriggerOnUpdateIconsAndStyle(uisoWizardDarkStyle);
-            if not HasLightStyle then begin
-              DeleteIcon(H, M, PChar('Z_TASKFORM_INFOICON'));
-              DeleteIcon(H, M, PChar('Z_TASKFORM_ERRORICON'));
-              DeleteIcon(H, M, PChar('Z_TASKFORM_WARNICON'));
-            end;
-            if not HasDarkStyle then begin
-              DeleteIcon(H, M, PChar('Z_TASKFORM_INFOICON_DARK'));
-              DeleteIcon(H, M, PChar('Z_TASKFORM_ERRORICON_DARK'));
-              DeleteIcon(H, M, PChar('Z_TASKFORM_WARNICON_DARK'));
-            end;
           end;
         end;
 
@@ -1073,7 +1081,7 @@ begin
   { Read the manifest resource into a string }
   SetString(S, nil, SeekToResourceData(F, 24, 1));
   var Offset := F.Position;
-  F.ReadBuffer(S[1], Length(S));
+  F.ReadBuffer(S[1], ULength(S));
 
   { Locate and update the <dependency> tag }
   P := Pos(DependencyStartTag, S);

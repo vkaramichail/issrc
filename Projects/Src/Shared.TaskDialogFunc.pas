@@ -45,14 +45,12 @@ end;
 
 function DoTaskDialog(const hWnd: HWND; const Instruction, Text, Caption, Icon: PChar;
   const CommonButtons: Cardinal; const ButtonLabels: array of String; const ButtonIDs: array of Integer;
-  const ShieldButton: Integer; const RightToLeft: Boolean; const TriggerMessageBoxCallbackFuncFlags: LongInt;
+  const ShieldButton: Integer; const RightToLeft: Boolean; const TriggerMessageBoxCallbackFuncFlags: Cardinal;
   var ModalResult: Integer; const VerificationText: PChar; const pfVerificationFlagChecked: PBOOL): Boolean;
 var
   Config: TTaskDialogConfig;
-  NButtonLabelsAvailable: Integer;
   ButtonItems: TTaskDialogButtons;
   ButtonItem: TTaskDialogButtonItem;
-  I: Integer;
   ActiveWindow: Windows.HWND;
   WindowList: Pointer;
 begin
@@ -78,17 +76,17 @@ begin
     end;
     ButtonItems := nil;
     try
-      NButtonLabelsAvailable := Length(ButtonLabels);
+      const NButtonLabelsAvailable = Length(ButtonLabels);
       if NButtonLabelsAvailable <> 0 then begin
         ButtonItems := TTaskDialogButtons.Create(nil, TTaskDialogButtonItem);
         Config.dwFlags := Config.dwFlags or TDF_USE_COMMAND_LINKS;
-        for I := 0 to NButtonLabelsAvailable-1 do begin
+        for var I := 0 to NButtonLabelsAvailable-1 do begin
           ButtonItem := TTaskDialogButtonItem(ButtonItems.Add);
           ButtonItem.Caption := ButtonLabels[I];
           ButtonItem.ModalResult := ButtonIDs[I];
         end;
         Config.pButtons := ButtonItems.Buttons;
-        Config.cButtons := ButtonItems.Count;
+        Config.cButtons := UINT(ButtonItems.Count);
       end;
       TriggerMessageBoxCallbackFunc(TriggerMessageBoxCallbackFuncFlags, False);
       ActiveWindow := GetActiveWindow;
@@ -207,7 +205,7 @@ begin
 
   { Go }
   const MessageBoxCaption = GetMessageBoxCaption(PChar(Caption), Typ);
-  const TriggerMessageBoxCallbackFuncFlags = IfThen(Typ in [mbError, mbCriticalError], MB_ICONSTOP, 0);
+  const TriggerMessageBoxCallbackFuncFlags = Cardinal(IfThen(Typ in [mbError, mbCriticalError], MB_ICONSTOP, 0));
 
   {$IFDEF USETASKDIALOGFORM}
   const LStyle = TStyleManager.ActiveStyle;
@@ -226,8 +224,6 @@ begin
            GetMessageBoxRightToLeft, TriggerMessageBoxCallbackFuncFlags, Result, PChar(VerificationText), pfVerificationFlagChecked) then //note that MB_ICONEXCLAMATION (used by mbError) includes MB_ICONSTOP (used by mbCriticalError)
     Result := 0;
 end;
-
-procedure InitCommonControls; external comctl32 name 'InitCommonControls';
 
 initialization
   InitCommonControls;

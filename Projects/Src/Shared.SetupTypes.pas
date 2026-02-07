@@ -12,7 +12,7 @@ unit Shared.SetupTypes;
 interface
 
 uses
-  SysUtils, Classes, ECDSA, Shared.Struct;
+  Windows, SysUtils, Classes, ECDSA, Shared.Struct;
 
 const
   { Predefined page identifiers }
@@ -50,7 +50,7 @@ const
   CodeRootKeyFlag64Bit = $02000000;
   CodeRootKeyValidFlags = CodeRootKeyFlag32Bit or CodeRootKeyFlag64Bit;
 
-  HKEY_AUTO = 1; { Any value will work as long as it isn't 0 and doesn't match a predefined key handle (8xxxxxxx) nor includes any of the CodeRootKeyValidFlags flags. }
+  HKEY_AUTO = HKEY(1); { Any UInt32 value will work as long as it isn't 0 and doesn't match a predefined key handle (8xxxxxxx) nor includes any of the CodeRootKeyValidFlags flags. }
 
 function StringsToCommaString(const Strings: TStrings): String;
 procedure SetStringsFromCommaString(const Strings: TStrings; const Value: String);
@@ -211,7 +211,7 @@ function StrToSetupVersionData(const S: String; var VerData: TSetupVersionData):
       J := StrToInt(Copy(Z, I+2, Maxint));
       if (J < Low(Byte)) or (J > High(Byte)) then
         Abort;
-      ServicePack := J shl 8;
+      ServicePack := Word(J shl 8);
       { ^ Shift left 8 bits because we're setting the "major" service pack
         version number. This parser doesn't currently accept "minor" service
         pack version numbers. }
@@ -223,7 +223,7 @@ function StrToSetupVersionData(const S: String; var VerData: TSetupVersionData):
       J := StrToInt(Copy(Z, 1, I-1));
       if (J < 0) or (J > 127) then
         Abort;
-      Ver.Major := J;
+      Ver.Major := Byte(J);
       Z := Copy(Z, I+1, Maxint);
       I := Pos('.', Z);
       HasBuild := I <> 0;
@@ -233,19 +233,19 @@ function StrToSetupVersionData(const S: String; var VerData: TSetupVersionData):
       Z := Copy(Z, 1, I-1);
       J := StrToInt(Z);
       if (J < 0) or (J > 99) then Abort;
-      Ver.Minor := J;
+      Ver.Minor := Byte(J);
       if HasBuild then begin
         J := StrToInt(B);
         if (J < Low(Ver.Build)) or (J > High(Ver.Build)) then
           Abort;
-        Ver.Build := J;
+        Ver.Build := Word(J);
       end;
     end
     else begin  { no minor version specified }
       J := StrToInt(Z);
       if (J < 0) or (J > 127) then
         Abort;
-      Ver.Major := J;
+      Ver.Major := Byte(J);
     end;
   end;
 var
@@ -330,7 +330,7 @@ begin
     SetLength(Result, NAvailable);
     var NAdded := 0;
     for var KeyIndex := 0 to NAvailable-1 do begin
-      if IsISSigAllowedKey(ISSigAllowedKeys, KeyIndex) then begin
+      if IsISSigAllowedKey(ISSigAllowedKeys, Integer(KeyIndex)) then begin
         Result[NAdded] := ISSigAvailableKeys[KeyIndex];
         Inc(NAdded);
       end;

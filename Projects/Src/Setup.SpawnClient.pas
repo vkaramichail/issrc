@@ -22,11 +22,13 @@ function InstExecEx(const RunAsOriginalUser: Boolean;
   const DisableFsRedir: Boolean; const Filename, Params, WorkingDir: String;
   const Wait: TExecWait; const ShowCmd: Integer;
   const ProcessMessagesProc: TProcedure; const OutputReader: TCreateProcessOutputReader;
-  var ResultCode: Integer): Boolean;
+  var ResultCode: DWORD): Boolean;
 function InstShellExecEx(const RunAsOriginalUser: Boolean;
   const Verb, Filename, Params, WorkingDir: String;
   const Wait: TExecWait; const ShowCmd: Integer;
-  const ProcessMessagesProc: TProcedure; var ResultCode: Integer): Boolean;
+  const ProcessMessagesProc: TProcedure; var ResultCode: DWORD): Boolean;
+function IsSpawnServerPresent: Boolean;
+function StopSpawnServerProcess(const AExitCode: DWORD): Boolean;
 
 implementation
 
@@ -88,7 +90,7 @@ begin
 end;
 
 function CallSpawnServer(const CopyDataMsg: DWORD; var M: TMemoryStream;
-  const ProcessMessagesProc: TProcedure; var ResultCode: Integer): Boolean;
+  const ProcessMessagesProc: TProcedure; var ResultCode: DWORD): Boolean;
 var
   CopyDataStruct: TCopyDataStruct;
   MsgResult: LRESULT;
@@ -97,7 +99,9 @@ var
   LastQueryTime, NowTime: DWORD;
 begin
   CopyDataStruct.dwData := CopyDataMsg;
-  CopyDataStruct.cbData := M.Size;
+  if M.Size > High(DWORD) then
+    InternalError('CallSpawnServer: Size limit exceeded');
+  CopyDataStruct.cbData := DWORD(M.Size);
   CopyDataStruct.lpData := M.Memory;
   AllowSpawnServerToSetForegroundWindow;
   MsgResult := SendMessage(SpawnServerWnd, WM_COPYDATA, 0, LPARAM(@CopyDataStruct));
@@ -139,7 +143,7 @@ function InstExecEx(const RunAsOriginalUser: Boolean;
   const DisableFsRedir: Boolean; const Filename, Params, WorkingDir: String;
   const Wait: TExecWait; const ShowCmd: Integer;
   const ProcessMessagesProc: TProcedure; const OutputReader: TCreateProcessOutputReader;
-  var ResultCode: Integer): Boolean;
+  var ResultCode: DWORD): Boolean;
 var
   M: TMemoryStream;
 begin
@@ -169,7 +173,7 @@ end;
 function InstShellExecEx(const RunAsOriginalUser: Boolean;
   const Verb, Filename, Params, WorkingDir: String;
   const Wait: TExecWait; const ShowCmd: Integer;
-  const ProcessMessagesProc: TProcedure; var ResultCode: Integer): Boolean;
+  const ProcessMessagesProc: TProcedure; var ResultCode: DWORD): Boolean;
 var
   M: TMemoryStream;
 begin
@@ -200,6 +204,17 @@ procedure InitializeSpawnClient(const AServerWnd: HWND);
 begin
   SpawnServerWnd := AServerWnd;
   SpawnServerPresent := True;
+end;
+
+function IsSpawnServerPresent: Boolean;
+begin
+  Result := SpawnServerPresent;
+end;
+
+function StopSpawnServerProcess(const AExitCode: DWORD): Boolean;
+begin
+  Result := PostMessage(SpawnServerWnd, WM_SpawnServer_ExitNow, AExitCode,
+    SPAWN_EXITNOW_LPARAM_MAGIC);
 end;
 
 end.

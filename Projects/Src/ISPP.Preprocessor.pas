@@ -33,7 +33,7 @@ type
 
   TConditionalVerboseMsg = (cvmIf, cvmElif, cvmElse, cvmEndif);
 
-  TConditionalTranslationStack = class(TStack)
+  TConditionalTranslationStack = class(TStack<TConditionalBlockInfo>)
   private
     FPreproc: TPreprocessor;
     FCache: Boolean;
@@ -54,8 +54,8 @@ type
 
   TPreprocessorCommand = (pcError, pcIf, pcIfDef, pcIfNDef, pcIfExist,
     pcIfNExist, pcElseIf, pcElse, pcEndIf, pcDefine, pcUndef, pcInclude,
-    pcErrorDir, pcPragma, pcLine, pcImport, pcPrint, pcPrintEnv, pcFile,
-    pcExecute, pcGlue, pcEndGlue, pcDim, pcProcedure, pcEndProc, pcEndLoop,
+    pcErrorDir, pcPragma, pcLine, pcImport, pcEmit, pcEnv, pcFile,
+    pcExpr, pcInsert, pcAppend, pcDim, pcSub, pcEndSub, pcEndLoop,
     pcFor, pcReDim);
 
   TDropGarbageProc = procedure(Item: Pointer);
@@ -89,7 +89,7 @@ type
     procedure DropGarbage;
     function ProcessInlineDirectives(P: PChar): string;
     function ProcessPreprocCommand(Command: TPreprocessorCommand;
-      var Params: string; ParamsOffset: Integer): Boolean;
+      var Params: string; ParamsOffset: NativeInt): Boolean;
     procedure PushFile(const FileName: string);
     procedure PopFile;
     function CheckFile(const FileName: string): Boolean;
@@ -203,12 +203,12 @@ begin
   end;
   if StrLIComp('echo', P, 4) = 0 then
   begin
-    Result := pcPrint;
+    Result := pcEmit;
     Inc(P, 4)
   end
   else if StrLIComp('call', P, 4) = 0 then
   begin
-    Result := pcExecute;
+    Result := pcExpr;
     Inc(P, 4);
   end
   else
@@ -219,7 +219,7 @@ end;
 
 constructor EPreprocError.Create(Preproc: TPreprocessor; const Msg: string);
 begin
-  inherited Create(Msg + '.');
+  inherited Create(AddPeriod(Msg));
   FileName := Preproc.GetFileName(-1);
   LineNumber := Preproc.GetLineNumber(-1);
 end;
@@ -320,7 +320,6 @@ var
   IncludeLine: Boolean;
   P, P1: PChar;
   Command: TPreprocessorCommand;
-  DirectiveOffset: Integer;
   State: Boolean;
   S, S1: string;
 begin
@@ -344,8 +343,8 @@ begin
         begin
           case Command of
             pcError: RaiseError(SUnknownPreprocessorDirective);
-            pcProcedure: RaiseError('Nested procedure declaration not allowed');
-            pcEndProc:
+            pcSub: RaiseError('Nested procedure declaration not allowed');
+            pcEndSub:
               begin
                 S := P;
                 ProcessPreprocCommand(Command, S, P - P1);
@@ -358,7 +357,7 @@ begin
         else
         begin
           State := FStack.Include;
-          DirectiveOffset := P - P1;
+          const DirectiveOffset = P - P1;
           //S := Copy(LineRead, DirectiveOffset + 1, MaxInt);
           S := P;
           case Command of
@@ -374,7 +373,7 @@ begin
             else
               if State then
                 case Command of
-                  pcPrint, pcPrintEnv:
+                  pcEmit, pcEnv:
                     begin
                       ProcessPreprocCommand(Command, S, DirectiveOffset);
                       VerboseMsg(8, SLineEmitted, [S]);
@@ -506,7 +505,7 @@ begin
       if LineStack.Include then Result := Result + S;
       Command := ParsePreprocCommand(DStart, Char(FOptions.InlineEnd[1]));
       if Command = pcError then
-        Command := pcPrint;
+        Command := pcEmit;
       DEnd := DStart;
       SetString(S, DStart, ScanForInlineEnd(DEnd) - DStart);
 
@@ -524,10 +523,10 @@ begin
       else
         if LineStack.Include then
           case Command of
-            pcInclude, pcGlue..pcEndLoop:
+            pcInclude, pcInsert..pcEndSub:
               RaiseError(Format(SDirectiveCannotBeInline,
                 [PreprocCommands[Command]]));
-            pcPrint, pcPrintEnv, pcFile:
+            pcEmit, pcEnv, pcFile:
               begin
                 ProcessPreprocCommand(Command, S, DStart - LineStart);
                 Result := Result + S;
@@ -568,7 +567,7 @@ type
   TParserAccess = class(TParser);
 
 function TPreprocessor.ProcessPreprocCommand(Command: TPreprocessorCommand;
-  var Params: string; ParamsOffset: Integer): Boolean;
+  var Params: string; ParamsOffset: NativeInt): Boolean;
 
   function ParseScope(Parser: TParser; ExpectedTokens: TTokenKinds = [tkIdent]): TDefineScope;
   const
@@ -668,7 +667,7 @@ function TPreprocessor.ProcessPreprocCommand(Command: TPreprocessorCommand;
           P := FExpr;
           MacroExprPos.FileIndex := FCurrentFile;
           MacroExprPos.Line := FCurrentLine;
-          MacroExprPos.Column := (FExpr - Start) + ParamsOffset;
+          MacroExprPos.Column := Integer((FExpr - Start) + ParamsOffset);
           while P^ <> #0 do Inc(P);
           SetString(AExpr, FExpr, P - FExpr);
           AExpr := Trim(AExpr);
@@ -873,7 +872,7 @@ function TPreprocessor.ProcessPreprocCommand(Command: TPreprocessorCommand;
     FileName := PrependDirName(FileName, FSourcePath);
     if FileExists(FileName) then
     begin
-      Result := GetTempFileName(ExtractFileName(FileName));
+      Result := GetTempFileName(PathExtractName(FileName));
       StatusMsg(SProcessingExternalFile, [FileName]);
       NewOptions := FOptions;
       Preprocessor := TPreprocessor.Create(FCompilerParams, FIdentManager,
@@ -927,7 +926,7 @@ function TPreprocessor.ProcessPreprocCommand(Command: TPreprocessorCommand;
     end;
   end;
 
-  procedure Glue(LineNo: Integer);
+  procedure BeginInsert(LineNo: Integer);
   begin
     if LineNo > FOutput.Count then
       RaiseError(Format(SInsertLineNoTooBig, [LineNo]));
@@ -935,7 +934,7 @@ function TPreprocessor.ProcessPreprocCommand(Command: TPreprocessorCommand;
     VerboseMsg(2, SChangingInsertionPointToLine, [FInsertionPoint]);
   end;
 
-  procedure EndGlue;
+  procedure EndInsert;
   begin
     VerboseMsg(2, SResettingInsertionPoint);
     FInsertionPoint := -1;
@@ -1013,20 +1012,20 @@ begin
           RaiseError(Params.Trim);
         end;
       pcPragma: Pragma(Parser);
-      pcPrint: Params := ToStr(Evaluate).AsStr;
-      pcPrintEnv:
+      pcEmit: Params := ToStr(Evaluate).AsStr;
+      pcEnv:
         begin
           NextTokenExpect([tkIdent]);
           Params := GetEnv(TokenString);
           EndOfExpr;
         end;
       pcFile: Params := DoFile(StrExpr(False));
-      pcExecute: Evaluate;
-      pcGlue: Glue(IntegerExpr(False));
-      pcEndGlue: EndGlue;
+      pcExpr: Evaluate;
+      pcInsert: BeginInsert(IntegerExpr(False));
+      pcAppend: EndInsert;
       pcFor: ParseFor(Parser);
-      pcProcedure: BeginProcDecl(Parser);
-      pcEndProc: EndProcDecl;
+      pcSub: BeginProcDecl(Parser);
+      pcEndSub: EndProcDecl;
     else
       WarningMsg(SDirectiveNotYetSupported, [PreprocCommands[Command]])
     end;
@@ -1085,7 +1084,7 @@ end;
 
 function TPreprocessor.CheckFile(const FileName: string): Boolean;
 begin
-  Result := FFileStack.IndexOf(ExpandFileName(FileName)) < 0;
+  Result := FFileStack.IndexOf(PathExpand(FileName)) < 0;
 end;
 
 procedure TPreprocessor.PopFile;
@@ -1095,7 +1094,7 @@ end;
 
 procedure TPreprocessor.PushFile(const FileName: string);
 begin
-  FFileStack.AddObject(ExpandFileName(FileName), TObject(dsPublic));
+  FFileStack.AddObject(PathExpand(FileName), TObject(dsPublic));
 end;
 
 procedure TPreprocessor.CallIdleProc;
@@ -1193,7 +1192,7 @@ begin
   A.BlockState := Eval;
   A.Fired := Eval;
   A.HadElse := False;
-  PushItem(Pointer(A));
+  PushItem(A);
   FCacheValid := False;
   VerboseMsg(cvmIf, Eval);
 end;
@@ -1202,11 +1201,9 @@ procedure TConditionalTranslationStack.ElseIfInstruction(Eval: Boolean);
 var
   A: TConditionalBlockInfo;
 begin
-  if AtLeast(1) then
-  begin
+  if AtLeast(1) then begin
     A := Last;
-    with A do
-    begin
+    with A do begin
       if HadElse then FPreproc.RaiseError(SElifAfterElse);
       BlockState := not Fired and Eval;
       Fired := Fired or Eval;
@@ -1214,8 +1211,7 @@ begin
     end;
     UpdateLast(A);
     VerboseMsg(cvmElif, Eval);
-  end
-  else
+  end else
     FPreproc.RaiseError(SElseWithoutIf);
 end;
 
@@ -1223,11 +1219,9 @@ procedure TConditionalTranslationStack.ElseInstruction;
 var
   A: TConditionalBlockInfo;
 begin
-  if AtLeast(1) then
-  begin
+  if AtLeast(1) then begin
     A := Last;
-    with A do
-    begin
+    with A do begin
       if HadElse then FPreproc.RaiseError(SDoubleElse);
       BlockState := not Fired;
       Fired := True;
@@ -1236,38 +1230,32 @@ begin
     end;
     UpdateLast(A);
     VerboseMsg(cvmElse, False);
-  end
-  else
+  end else
     FPreproc.RaiseError(SElseWithoutIf);
 end;
 
 procedure TConditionalTranslationStack.EndIfInstruction;
 begin
-  if AtLeast(1) then
-  begin
+  if AtLeast(1) then begin
     PopItem;
     FCacheValid := False;
     VerboseMsg(cvmEndif, False);
-  end
-  else
+  end else
     FPreproc.RaiseError(SEndifWithoutIf);
 end;
 
 function TConditionalTranslationStack.Include: Boolean;
-var
-  I: Integer;
 begin
   if FCacheValid then
     Result := FCache
-  else
-  begin
+  else begin
     FCacheValid := True;
-    if Count > 0 then
-    begin
+    if Count > 0 then begin
       Result := False;
       FCache := False;
-      for I := Count - 1 downto 0 do
-        if not TConditionalBlockInfo(List[I]).BlockState then Exit;
+      for var I := Count - 1 downto 0 do
+        if not TConditionalBlockInfo(List[I]).BlockState then
+          Exit;
     end;
     Result := True;
     FCache := True;
@@ -1276,18 +1264,19 @@ end;
 
 procedure TConditionalTranslationStack.Resolved;
 begin
-  if Count > 0 then FPreproc.RaiseError(SEndifExpected);
+  if Count > 0 then
+    FPreproc.RaiseError(SEndifExpected);
 end;
 
 function TConditionalTranslationStack.Last: TConditionalBlockInfo;
 begin
-  Result := TConditionalBlockInfo(NativeInt(List.Last));
+  Result := List.Last;
 end;
 
 procedure TConditionalTranslationStack.UpdateLast(
   const Value: TConditionalBlockInfo);
 begin
-  List[List.Count - 1] := Pointer(Value);
+  List[List.Count - 1] := Value;
 end;
 
 procedure TConditionalTranslationStack.VerboseMsg(
@@ -1489,7 +1478,7 @@ begin
   Name := UpperCase(Name);
   if (Name = '__FILENAME__') or (Name = '__FILE__') then
   begin
-    if Value <> nil then MakeStr(Value^, ExtractFileName(FIncludes[FCurrentFile]))
+    if Value <> nil then MakeStr(Value^, PathExtractName(FIncludes[FCurrentFile]))
   end
   else if Name = '__PATHFILENAME__' then
   begin
@@ -1497,7 +1486,7 @@ begin
   end
   else if Name = '__DIR__' then
   begin
-    if Value <> nil then MakeStr(Value^, ExtractFileDir(FIncludes[FCurrentFile]))
+    if Value <> nil then MakeStr(Value^, PathExtractDir(FIncludes[FCurrentFile]))
   end
   else if Name = '__LINE__' then
   begin
@@ -1536,7 +1525,8 @@ end;
 procedure TPreprocessor.CollectGarbage(Item: Pointer;
   Proc: TDropGarbageProc);
 begin
-  if (Item = nil) or (@Proc = nil) then Exit;
+  if (Item = nil) or (@Proc = nil) then
+    Exit;
   if FGarbageCollection = nil then
     FGarbageCollection := TList.Create;
   FGarbageCollection.Add(Item);
@@ -1544,30 +1534,27 @@ begin
 end;
 
 procedure TPreprocessor.UncollectGarbage(Item: Pointer);
-var
-  I: Integer;
 begin
-  if FGarbageCollection = nil then Exit;
-  for I := 0 to FGarbageCollection.Count div 2 - 1 do
-    if FGarbageCollection.Items[I * 2] = Item then
-    begin
+  if FGarbageCollection = nil then
+    Exit;
+  for var I := 0 to FGarbageCollection.Count div 2 - 1 do
+    if FGarbageCollection.Items[I * 2] = Item then begin
       FGarbageCollection.Items[I * 2] := nil;
       FGarbageCollection.Items[I * 2 + 1] := nil;
     end;
   FGarbageCollection.Pack;
-  if FGarbageCollection.Count = 0 then FreeAndNil(FGarbageCollection);
+  if FGarbageCollection.Count = 0 then
+    FreeAndNil(FGarbageCollection);
 end;
 
 procedure TPreprocessor.DropGarbage;
 var
-  I: Integer;
   Proc: TDropGarbageProc;
   Item: Pointer;
 begin
   if FGarbageCollection <> nil then
   try
-    for I := 0 to FGarbageCollection.Count div 2 - 1 do
-    begin
+    for var I := 0 to FGarbageCollection.Count div 2 - 1 do begin
       Item := FGarbageCollection.Items[I * 2];
       Proc := FGarbageCollection.Items[I * 2 + 1];
       try
@@ -1630,13 +1617,6 @@ procedure TPreprocessor.IncludeFile(FileName: string;
     end;
   end;
 
-  function RemoveSlash(const S: string): string;
-  begin
-    Result := S;
-    if (Length(Result) > 3) and (Result[Length(Result)] = '\') then
-      Delete(Result, Length(Result), 1);
-  end;
-
   function DoSearch(const SearchDirs: String): String;
   var
     FilePart: PChar;
@@ -1675,17 +1655,17 @@ begin
     if not UseIncludePathOnly then
     begin
       for var I := FFileStack.Count - 1 downto 0 do
-        AddToPath(SearchDirs, ExtractFileDir(FFileStack[I]));
+        AddToPath(SearchDirs, PathExtractDir(FFileStack[I]));
       if FIncludes[0] <> '' then
-        AddToPath(SearchDirs, ExtractFileDir(FIncludes[0]));
-      AddToPath(SearchDirs, RemoveSlash(FSourcePath));
+        AddToPath(SearchDirs, PathExtractDir(FIncludes[0]));
+      AddToPath(SearchDirs, RemoveBackslashUnlessRoot(FSourcePath));
     end;
 
     AddToPath(SearchDirs, FIncludePath);
     AddToPath(SearchDirs, GetEnv('INCLUDE'));
 
     if not UseIncludePathOnly then
-      AddToPath(SearchDirs, RemoveSlash(FCompilerPath));
+      AddToPath(SearchDirs, RemoveBackslashUnlessRoot(FCompilerPath));
   end;
 
   FullFileName := DoSearch(SearchDirs);

@@ -26,7 +26,6 @@ uses
   SetupLdrAndSetup.InstFunc in 'Src\SetupLdrAndSetup.InstFunc.pas',
   Shared.FileClass in 'Src\Shared.FileClass.pas',
   SHA256 in '..\Components\SHA256.pas',
-  SetupLdrAndSetup.RedirFunc in 'Src\SetupLdrAndSetup.RedirFunc.pas',
   Shared.VerInfoFunc in 'Src\Shared.VerInfoFunc.pas',
   Shared.EncryptionFunc in 'Src\Shared.EncryptionFunc.pas',
   ChaCha20 in '..\Components\ChaCha20.pas',
@@ -43,27 +42,6 @@ uses
 {$R Res\SetupLdr.version.res}
 {$R Res\SetupLdr.offsettable.res}
 
-procedure RaiseLastError(const Msg: TSetupMessageID);
-var
-  ErrorCode: DWORD;
-begin
-  ErrorCode := GetLastError;
-  raise Exception.Create(FmtSetupMessage(msgLastErrorMessage,
-    [SetupMessages[Msg], IntToStr(ErrorCode), Win32ErrorString(ErrorCode)]));
-end;
-
-procedure ShowExceptionMsg;
-begin
-  if ExceptObject is EAbort then
-    Exit;
-  MessageBox(0, PChar(GetExceptMessage), Pointer(SetupMessages[msgErrorTitle]),
-    MB_OK or MB_ICONSTOP);
-    { ^ use a Pointer cast instead of a PChar cast so that it will use "nil"
-      if SetupMessages[msgErrorTitle] is empty due to the messages not being
-      loaded yet. MessageBox displays 'Error' as the caption if the lpCaption
-      parameter is nil. }
-end;
-
 const
   { Exit codes that are returned by SetupLdr.
     Note: Setup also returns exit codes with the same numbers. }
@@ -78,6 +56,7 @@ type
 var
   InitShowHelp: Boolean = False;
   InitDisableStartupPrompt: Boolean = False;
+  InitSuppressMsgBoxes: Boolean = False;
   InitLang, InitPassword: String;
   ActiveLanguage: Integer = -1;
   PendingNewLanguage: Integer = -1;
@@ -90,24 +69,55 @@ var
   OrigWndProc: Pointer;
   RestartSystem: Boolean = False;
 
-procedure ProcessCommandLine;
+procedure RaiseLastError(const Msg: TSetupMessageID);
 var
-  I: Integer;
-  Name: String;
+  ErrorCode: DWORD;
 begin
-  for I := 1 to NewParamCount do begin
-    Name := NewParamStr(I);
-    if (CompareText(Name, '/SP-') = 0) or
-       (CompareText(Copy(Name, 1, 10), '/SPAWNWND=') = 0) then
+  ErrorCode := GetLastError;
+  raise Exception.Create(FmtSetupMessage(msgLastErrorMessage,
+    [SetupMessages[Msg], IntToStr(ErrorCode), Win32ErrorString(ErrorCode)]));
+end;
+
+procedure ShowExceptionMsg;
+begin
+  if ExceptObject is EAbort then
+    Exit;
+  if not InitSuppressMsgBoxes then
+    MessageBox(0, PChar(GetExceptMessage), Pointer(SetupMessages[msgErrorTitle]),
+      MB_OK or MB_ICONSTOP);
+      { ^ use a Pointer cast instead of a PChar cast so that it will use "nil"
+        if SetupMessages[msgErrorTitle] is empty due to the messages not being
+        loaded yet. MessageBox displays 'Error' as the caption if the lpCaption
+        parameter is nil. }
+end;
+
+procedure ProcessCommandLine(var SelfFilename: String);
+begin
+  var SilentOrVerySilent := False;
+  var WantToSuppressMsgBoxes := False;
+  for var I := 1 to NewParamCount do begin
+    var ParamName, ParamValue: String;
+    SplitNewParamStr(I, ParamName, ParamValue);
+    if SameText(ParamName, '/SP-') or SameText(ParamName, '/SPAWNWND=') then
       InitDisableStartupPrompt := True
-    else if CompareText(Copy(Name, 1, 6), '/Lang=') = 0 then
-      InitLang := Copy(Name, 7, Maxint)
-    else if CompareText(Copy(Name, 1, 10), '/Password=') = 0 then
-      InitPassword := Copy(Name, 11, Maxint)
-    else if (CompareText(Name, '/HELP') = 0) or
-            (CompareText(Name, '/?') = 0) then
-      InitShowHelp := True;
+    else if SameText(ParamName, '/Lang=') then
+      InitLang := ParamValue
+    else if SameText(ParamName, '/Password=') then
+      InitPassword := ParamValue
+    else if SameText(ParamName, '/HELP') or SameText(ParamName, '/?') then
+      InitShowHelp := True
+    else if SameText(ParamName, '/Silent') or SameText(ParamName, '/VerySilent') then
+      SilentOrVerySilent := True
+    else if SameText(ParamName, '/SuppressMsgBoxes') then
+      WantToSuppressMsgBoxes := True
+    {$IFDEF DEBUG}
+    else if SameText(ParamName, '/SELFFILENAME=') then
+      SelfFilename := PathExpand(ParamValue);
+    {$ENDIF};
   end;
+
+  if WantToSuppressMsgBoxes and SilentOrVerySilent then
+    InitSuppressMsgBoxes := True;
 end;
 
 procedure SetActiveLanguage(const I: Integer);
@@ -180,10 +190,15 @@ var
 begin
   CmdLine := '"' + Filename + '" ' + Parms;
 
+  { Pass current directory in "final" reparsed form so that Setup won't have
+    trouble accessing the directory after enabling RedirectionGuard if there's
+    an untrusted redirect in the path. }
+  const WorkingDir = GetFinalCurrentDir;
+
   FillChar(StartupInfo, SizeOf(StartupInfo), 0);
   StartupInfo.cb := SizeOf(StartupInfo);
-  if not CreateProcess(nil, PChar(CmdLine), nil, nil, False, 0, nil, nil,
-     StartupInfo, ProcessInfo) then
+  if not CreateProcess(nil, PChar(CmdLine), nil, nil, False, 0, nil,
+     PChar(WorkingDir), StartupInfo, ProcessInfo) then
     RaiseLastError(msgLdrCannotExecTemp);
   CloseHandle(ProcessInfo.hThread);
   { Wait for the process to terminate, processing messages in the meantime }
@@ -215,11 +230,11 @@ procedure RunImageLocally(const Module: HMODULE);
   Based on code from http://www.microsoft.com/msj/0398/win320398.htm, with
   some fixes incorporated. }
 
-  procedure Touch(var X: DWORD);
-  { Note: Uses asm to ensure it isn't optimized away }
-  asm
-    xor edx, edx
-    lock or [eax], edx
+  procedure Touch(var X: Integer);
+  begin
+    { An atomic operation is used to ensure we can't corrupt a simultaneous
+      write by another thread (though there shouldn't be other threads) }
+    InterlockedExchangeAdd(X, 0);
   end;
 
 var
@@ -228,7 +243,6 @@ var
   MemInfo: TMemoryBasicInformation;
   ChangedProtection: Boolean;
   OrigProtect: DWORD;
-  Offset: Cardinal;
 begin
   { Get system's page size }
   GetSystemInfo(SysInfo);
@@ -257,9 +271,9 @@ begin
 
       { Write to every page in the region.
         This forces the page to be in RAM and swapped to the paging file. }
-      Offset := 0;
-      while Offset < Cardinal(MemInfo.RegionSize) do begin
-        Touch(PDWORD(Cardinal(MemInfo.BaseAddress) + Offset)^);
+      var Offset: SIZE_T := 0;
+      while Offset < MemInfo.RegionSize do begin
+        Touch(PInteger(PByte(MemInfo.BaseAddress) + Offset)^);
         Inc(Offset, SysInfo.dwPageSize);
       end;
 
@@ -270,24 +284,24 @@ begin
     end;
 
     { Get next region }
-    Cardinal(CurAddr) := Cardinal(MemInfo.BaseAddress) + MemInfo.RegionSize;
+    PByte(CurAddr) := PByte(MemInfo.BaseAddress) + MemInfo.RegionSize;
     if VirtualQuery(CurAddr, MemInfo, SizeOf(MemInfo)) = 0 then
       Break;
   end;
 end;
 
-function GetSetupLdrOffsetTable: PSetupLdrOffsetTable;
+function GetSetupLdrOffsetTable(const M: HMODULE): PSetupLdrOffsetTable;
 { Locates the offset table resource, and returns a pointer to it }
 var
   Rsrc: HRSRC;
   ResData: HGLOBAL;
 begin
-  Rsrc := FindResource(0, MAKEINTRESOURCE(SetupLdrOffsetTableResID), RT_RCDATA);
+  Rsrc := FindResource(M, MAKEINTRESOURCE(SetupLdrOffsetTableResID), RT_RCDATA);
   if Rsrc = 0 then
     SetupCorruptError;
-  if SizeofResource(0, Rsrc) <> SizeOf(Result^) then
+  if SizeofResource(M, Rsrc) <> SizeOf(Result^) then
     SetupCorruptError;
-  ResData := LoadResource(0, Rsrc);
+  ResData := LoadResource(M, Rsrc);
   if ResData = 0 then
     SetupCorruptError;
   Result := LockResource(ResData);
@@ -319,6 +333,8 @@ begin
           'Disables the "This will install... Do you wish to continue?" message box at the beginning of Setup.' + SNewLine +
           '/SILENT, /VERYSILENT' + SNewLine +
           'Instructs Setup to be silent or very silent.' + SNewLine +
+          '/NOSTYLE' + SNewLine +
+          'Prevents Setup from activating custom styles (including the built-in custom dark style).' + SNewLine +
           '/SUPPRESSMSGBOXES' + SNewLine +
           'Instructs Setup to suppress message boxes.' + SNewLine +
           '/LOG' + SNewLine +
@@ -331,24 +347,18 @@ begin
           'Prevents Setup from restarting the system following a successful installation, or after a Preparing to Install failure that requests a restart.' + SNewLine +
           '/RESTARTEXITCODE=exit code' + SNewLine +
           'Specifies a custom exit code that Setup is to return when the system needs to be restarted.' + SNewLine +
-          '/CLOSEAPPLICATIONS' + SNewLine +
-          'Instructs Setup to close applications using files that need to be updated.' + SNewLine +
-          '/NOCLOSEAPPLICATIONS' + SNewLine +
-          'Prevents Setup from closing applications using files that need to be updated.' + SNewLine +
-          '/FORCECLOSEAPPLICATIONS' + SNewLine +
-          'Instructs Setup to force close when closing applications.' + SNewLine +
-          '/FORCENOCLOSEAPPLICATIONS' + SNewLine +
-          'Prevents Setup from force closing when closing applications.' + SNewLine +
+          '/CLOSEAPPLICATIONS, /NOCLOSEAPPLICATIONS' + SNewLine +
+          'Instructs Setup to attempt closing applications using files that need to be updated, or prevents it from doing so.' + SNewLine +
+          '/FORCECLOSEAPPLICATIONS, /FORCENOCLOSEAPPLICATIONS' + SNewLine +
+          'Instructs Setup to force close when closing applications, or prevents it from doing so.' + SNewLine +
           '/LOGCLOSEAPPLICATIONS' + SNewLine +
           'Instructs Setup to create extra logging when closing applications for debugging purposes.' + SNewLine +
-          '/RESTARTAPPLICATIONS' + SNewLine +
-          'Instructs Setup to restart applications.' + SNewLine +
-          '/NORESTARTAPPLICATIONS' + SNewLine +
-          'Prevents Setup from restarting applications.' + SNewLine +
-          '/LOADINF="filename"' + SNewLine +
-          'Instructs Setup to load the settings from the specified file after having checked the command line.' + SNewLine +
-          '/SAVEINF="filename"' + SNewLine +
-          'Instructs Setup to save installation settings to the specified file.' + SNewLine +
+          '/RESTARTAPPLICATIONS, /NORESTARTAPPLICATIONS' + SNewLine +
+          'Instructs Setup to attempt restarting applications, or prevents it from doing so.' + SNewLine +
+          '/REDIRECTIONGUARD, /NOREDIRECTIONGUARD' + SNewLine +
+          'Instructs Setup to attempt enabling RedirectionGuard, or prevents it from doing so.' + SNewLine +
+          '/LOADINF="filename", /SAVEINF="filename"' + SNewLine +
+          'Instructs Setup to load the settings from the specified file after having checked the command line, or to save them to it.' + SNewLine +
           '/LANG=language' + SNewLine +
           'Specifies the internal name of the language to use.' + SNewLine +
           '/DIR="x:\dirname"' + SNewLine +
@@ -376,9 +386,8 @@ begin
 end;
 
 var
-  SelfFilename: String;
   SourceF, DestF: TFile;
-  OffsetTable: PSetupLdrOffsetTable;
+  OffsetTable: TSetupLdrOffsetTable;
   TempDir: String;
   S: String;
   TempFile: String;
@@ -388,22 +397,39 @@ var
   I: Integer;
 begin
   try
+    {$IFDEF DEBUG}
+    ReportMemoryLeaksOnShutdown := True;
+    {$ENDIF}
+
     { Ensure all of SetupLdr is paged in so that in the case of a disk spanning
       install Windows will never complain when the disk/CD containing SetupLdr
       is ejected. }
     RunImageLocally(HInstance);
 
-    ProcessCommandLine;
-    
-    SelfFilename := NewParamStr(0);
+    var SelfFilename := NewParamStr(0);
+
+    ProcessCommandLine(SelfFilename);
+
     SourceF := TFile.Create(SelfFilename, fdOpenExisting, faRead, fsRead);
     try
-      OffsetTable := GetSetupLdrOffsetTable;
+      var M: HMODULE := 0;
+      if not PathSame(SelfFilename, NewParamStr(0)) then begin { Can only happen on DEBUG }
+        M := LoadLibraryEx(PChar(SelfFilename), 0, LOAD_LIBRARY_AS_DATAFILE);
+        if M = 0 then
+          raise Exception.Create('LoadLibraryEx failed');
+      end;
+      try
+        OffsetTable := GetSetupLdrOffsetTable(M)^;
+      finally
+        if M <> 0 then
+          FreeLibrary(M);
+      end;
+
       { Note: We don't check the OffsetTable.ID here because it would put a
         copy of the ID in the data section, and that would confuse external
-        programs that search for the offset table by ID. } 
+        programs that search for the offset table by ID. }
       if (OffsetTable.Version <> SetupLdrOffsetTableVersion) or
-         (GetCRC32(OffsetTable^, SizeOf(OffsetTable^) - SizeOf(OffsetTable.TableCRC)) <> OffsetTable.TableCRC) or
+         (GetCRC32(OffsetTable, SizeOf(OffsetTable) - SizeOf(OffsetTable.TableCRC)) <> OffsetTable.TableCRC) or
          (SourceF.Size < OffsetTable.TotalSize) then
         SetupCorruptError;
 
@@ -413,10 +439,10 @@ begin
         SetupCorruptError;
 
       var SetupEncryptionHeaderCRC: Longint;
-      SourceF.Read(SetupEncryptionHeaderCRC, SizeOf(SetupEncryptionHeaderCRC));
-      SourceF.Read(SetupEncryptionHeader, SizeOf(SetupEncryptionHeader));
+      SourceF.ReadBuffer(SetupEncryptionHeaderCRC, SizeOf(SetupEncryptionHeaderCRC));
+      SourceF.ReadBuffer(SetupEncryptionHeader, SizeOf(SetupEncryptionHeader));
       if SetupEncryptionHeaderCRC <> GetCRC32(SetupEncryptionHeader, SizeOf(SetupEncryptionHeader)) then
-         SetupCorruptError;
+        SetupCorruptError;
 
       var CryptKey: TSetupEncryptionKey;
       if SetupEncryptionHeader.EncryptionUse = euFull then begin
@@ -516,13 +542,18 @@ begin
           SetupLdr }
         SetupLdrWnd := CreateWindowEx(0, 'STATIC', 'InnoSetupLdrWindow', 0,
           0, 0, 0, 0, HWND_DESKTOP, 0, HInstance, nil);
-        Longint(OrigWndProc) := SetWindowLong(SetupLdrWnd, GWL_WNDPROC,
-          Longint(@SetupLdrWndProc));
+        LONG_PTR(OrigWndProc) := SetWindowLongPtr(SetupLdrWnd, GWLP_WNDPROC,
+          LONG_PTR(@SetupLdrWndProc));
 
-        { Now execute Setup. Use the exit code it returns as our exit code. }
+        { Now execute Setup. Use the exit code it returns as our exit code.
+          The UInt32 cast prevents sign extension. Also see
+          https://learn.microsoft.com/en-us/windows/win32/winprog64/interprocess-communication
+          SelfFilename is passed in "final" reparsed form so that Setup won't
+          have trouble accessing the file after enabling RedirectionGuard if
+          there's an untrusted redirect in the path. }
         ExecAndWait(TempFile, Format('/SL5="$%x,%d,%d,',
           [UInt32(SetupLdrWnd), OffsetTable.Offset0, OffsetTable.Offset1]) +
-          SelfFilename + '" ' + GetCmdTail, SetupLdrExitCode);
+          GetFinalFileName(SelfFilename) + '" ' + GetCmdTail, SetupLdrExitCode);
 
         { Synchronize our active language with Setup's, in case we need to
           display any messages below } 
@@ -535,7 +566,7 @@ begin
         { Even though Setup has terminated by now, the system may still have
           the file locked for a short period of time (esp. on multiprocessor
           systems), so use DelayDeleteFile to delete it. }
-        DelayDeleteFile(False, TempFile, 13, 50, 250);
+        DelayDeleteFile(TempFile, 13, 50, 250);
       if TempDir <> '' then
         RemoveDirectory(PChar(TempDir));
       if SetupLdrWnd <> 0 then
@@ -549,7 +580,7 @@ begin
       end;
     end;
     if RestartSystem then begin
-      if not RestartComputer then
+      if not RestartComputer and not InitSuppressMsgBoxes then
         MessageBox(0, PChar(SetupMessages[msgErrorRestartingComputer]),
           PChar(SetupMessages[msgErrorTitle]), MB_OK or MB_ICONEXCLAMATION or
           MB_SETFOREGROUND);
@@ -557,5 +588,5 @@ begin
   except
     ShowExceptionMsg;
   end;
-  Halt(Word(SetupLdrExitCode));
+  System.ExitCode := SetupLdrExitCode;
 end.

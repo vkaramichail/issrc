@@ -52,7 +52,18 @@ uses
   ISSigFunc in '..\Components\ISSigFunc.pas',
   StringScanner in '..\Components\StringScanner.pas',
   Shared.EncryptionFunc in 'Src\Shared.EncryptionFunc.pas',
-  UnsignedFunc in '..\Components\UnsignedFunc.pas';
+  UnsignedFunc in '..\Components\UnsignedFunc.pas',
+  uPSC_classes in '..\Components\UniPs\Source\uPSC_classes.pas',
+  uPSC_comobj in '..\Components\UniPs\Source\uPSC_comobj.pas',
+  uPSC_controls in '..\Components\UniPs\Source\uPSC_controls.pas',
+  uPSC_dll in '..\Components\UniPs\Source\uPSC_dll.pas',
+  uPSC_extctrls in '..\Components\UniPs\Source\uPSC_extctrls.pas',
+  uPSC_forms in '..\Components\UniPs\Source\uPSC_forms.pas',
+  uPSC_graphics in '..\Components\UniPs\Source\uPSC_graphics.pas',
+  uPSC_std in '..\Components\UniPs\Source\uPSC_std.pas',
+  uPSC_stdctrls in '..\Components\UniPs\Source\uPSC_stdctrls.pas',
+  uPSCompiler in '..\Components\UniPs\Source\uPSCompiler.pas',
+  uPSUtils in '..\Components\UniPs\Source\uPSUtils.pas';
 
 {$IMAGEBASE $00800000}
 {$SETPEOSVERSION 6.1}
@@ -78,7 +89,7 @@ type
 
 { Does not support iscbNotifyPreproc }
 function WrapperCallbackProc(Code: Integer; var Data: TCompilerCallbackData;
-  AppData: Longint): Integer;
+  AppData: NativeInt): Integer;
 stdcall;
 var
   WrapperData: PWrapperData;
@@ -147,9 +158,9 @@ begin
   WrapperData.CallerParams := @Params;
   GetMem(WrapperParams, Params.Size);
   try
-    Move(Params, WrapperParams^, Params.Size);
+    UMove(Params, WrapperParams^, Params.Size);
     WrapperParams.CallbackProc := WrapperCallbackProc;
-    WrapperParams.AppData := Integer(@WrapperData);
+    WrapperParams.AppData := NativeInt(@WrapperData);
     if Assigned(Params.CompilerPath) then
       WrapperParams.CompilerPath := PWideChar(String(PAnsiChar(Params.CompilerPath)));
     if Assigned(Params.SourcePath) then

@@ -281,9 +281,13 @@ begin
   end;
 end;
 
-procedure RegisterBidiCtrls_C(Cl: TPSPascalCompiler);
+procedure RegisterNewCtrls_C(Cl: TPSPascalCompiler);
 begin
   Cl.AddClassN(Cl.FindClass('TEdit'), 'TNewEdit');
+  with Cl.AddClassN(Cl.FindClass('TNewEdit'), 'TNewPathEdit') do
+  begin
+    RegisterProperty('AutoCompleteFiles', 'Boolean', iptrw);
+  end;
   Cl.AddClassN(Cl.FindClass('TMemo'), 'TNewMemo');
   Cl.AddClassN(Cl.FindClass('TComboBox'), 'TNewComboBox');
   Cl.AddClassN(Cl.FindClass('TListBox'), 'TNewListBox');
@@ -307,8 +311,8 @@ begin
   begin
     RegisterMethod('function FindNextPage(CurPage: TNewNotebookPage; GoForward: Boolean): TNewNotebookPage');
     RegisterProperty('Anchors', 'TAnchors', iptrw);
-    RegisterProperty('PageCount', 'Integer', iptr);
-    RegisterProperty('Pages', 'TNewNotebookPage Integer', iptr);
+    RegisterProperty('PageCount', 'NativeInt', iptr);
+    RegisterProperty('Pages', 'TNewNotebookPage NativeInt', iptr);
     RegisterProperty('ActivePage', 'TNewNotebookPage', iptrw);
   end;
 end;
@@ -335,12 +339,15 @@ begin
     RegisterMethod('function CalculateButtonWidth(const ButtonCaptions: array of String): Integer;');
     RegisterMethod('function ShouldSizeX: Boolean;');
     RegisterMethod('function ShouldSizeY: Boolean;');
-    RegisterMethod('procedure FlipSizeAndCenterIfNeeded(const ACenterInsideControl: Boolean; const CenterInsideControlCtl: TWinControl; const CenterInsideControlInsideClientArea: Boolean)');
+    RegisterMethod('procedure FlipAndCenterIfNeeded(const ACenterInsideControl: Boolean; const CenterInsideControlCtl: TWinControl; const CenterInsideControlInsideClientArea: Boolean)');
     RegisterProperty('ControlsFlipped', 'Boolean', iptr);
+    RegisterProperty('ExtraClientWidth', 'Integer', iptr);
+    RegisterProperty('ExtraClientHeight', 'Integer', iptr);
     RegisterProperty('FlipControlsOnShow', 'Boolean', iptrw);
-    RegisterProperty('KeepSizeY', 'Boolean', iptrw);
+    RegisterProperty('KeepSizeX', 'Boolean', iptr);
+    RegisterProperty('KeepSizeY', 'Boolean', iptr);
     RegisterProperty('RightToLeft', 'Boolean', iptr);
-    RegisterProperty('SizeAndCenterOnShow', 'Boolean', iptrw);
+    RegisterProperty('CenterOnShow', 'Boolean', iptrw);
   end;
 end;
 
@@ -369,7 +376,7 @@ begin
     RegisterProperty('InstallingPage', 'TNewNotebookPage', iptr);
     RegisterProperty('InfoAfterPage', 'TNewNotebookPage', iptr);
     RegisterProperty('DiskSpaceLabel', 'TNewStaticText', iptr);
-    RegisterProperty('DirEdit', 'TEdit', iptr);
+    RegisterProperty('DirEdit', 'TNewPathEdit', iptr);
     RegisterProperty('GroupEdit', 'TNewEdit', iptr);
     RegisterProperty('NoIconsCheck', 'TNewCheckBox', iptr);
     RegisterProperty('PasswordLabel', 'TNewStaticText', iptr);
@@ -474,8 +481,10 @@ begin
     RegisterProperty('Description', 'String', iptrw);
     RegisterProperty('Surface', 'TNewNotebookPage', iptr);
     RegisterProperty('SurfaceColor', 'TColor', iptr);
-    RegisterProperty('SurfaceHeight', 'Integer', iptr);
     RegisterProperty('SurfaceWidth', 'Integer', iptr);
+    RegisterProperty('SurfaceExtraWidth', 'Integer', iptr);
+    RegisterProperty('SurfaceHeight', 'Integer', iptr);
+    RegisterProperty('SurfaceExtraHeight', 'Integer', iptr);
     RegisterProperty('OnActivate', 'TWizardPageNotifyEvent', iptrw);
     RegisterProperty('OnBackButtonClick', 'TWizardPageButtonEvent', iptrw);
     RegisterProperty('OnCancelButtonClick', 'TWizardPageCancelEvent', iptrw);
@@ -488,11 +497,11 @@ procedure RegisterInputQueryWizardPage_C(Cl: TPSPascalCompiler);
 begin
   with CL.AddClassN(Cl.FindClass('TWizardPage'),'TInputQueryWizardPage') do
   begin
-    RegisterMethod('function Add(const APrompt: String; const APassword: Boolean): Integer');
-    RegisterProperty('Edits', 'TPasswordEdit Integer', iptr);
-    RegisterProperty('PromptLabels', 'TNewStaticText Integer', iptr);
+    RegisterMethod('function Add(const APrompt: String; const APassword: Boolean): NativeInt');
+    RegisterProperty('Edits', 'TPasswordEdit NativeInt', iptr);
+    RegisterProperty('PromptLabels', 'TNewStaticText NativeInt', iptr);
     RegisterProperty('SubCaptionLabel', 'TNewStaticText', iptr);
-    RegisterProperty('Values', 'String Integer', iptrw);
+    RegisterProperty('Values', 'String NativeInt', iptrw);
   end;
 end;
 
@@ -513,13 +522,13 @@ procedure RegisterInputDirWizardPage_C(CL: TPSPascalCompiler);
 begin
   with CL.AddClassN(CL.FindClass('TWizardPage'),'TInputDirWizardPage') do
   begin
-    RegisterMethod('function Add(const APrompt: String): Integer');
-    RegisterProperty('Buttons', 'TNewButton Integer', iptr);
-    RegisterProperty('Edits', 'TEdit Integer', iptr);
+    RegisterMethod('function Add(const APrompt: String): NativeInt');
+    RegisterProperty('Buttons', 'TNewButton NativeInt', iptr);
+    RegisterProperty('Edits', 'TEdit NativeInt', iptr);
     RegisterProperty('NewFolderName', 'String', iptrw);
-    RegisterProperty('PromptLabels', 'TNewStaticText Integer', iptr);
+    RegisterProperty('PromptLabels', 'TNewStaticText NativeInt', iptr);
     RegisterProperty('SubCaptionLabel', 'TNewStaticText', iptr);
-    RegisterProperty('Values', 'String Integer', iptrw);
+    RegisterProperty('Values', 'String NativeInt', iptrw);
   end;
 end;
 
@@ -527,13 +536,13 @@ procedure RegisterInputFileWizardPage_C(Cl: TPSPascalCompiler);
 begin
   with CL.AddClassN(Cl.FindClass('TWizardPage'),'TInputFileWizardPage') do
   begin
-    RegisterMethod('function Add(const APrompt, AFilter, ADefaultExtension: String): Integer');
-    RegisterProperty('Buttons', 'TNewButton Integer', iptr);
-    RegisterProperty('Edits', 'TEdit Integer', iptr);
-    RegisterProperty('PromptLabels', 'TNewStaticText Integer', iptr);
+    RegisterMethod('function Add(const APrompt, AFilter, ADefaultExtension: String): NativeInt');
+    RegisterProperty('Buttons', 'TNewButton NativeInt', iptr);
+    RegisterProperty('Edits', 'TEdit NativeInt', iptr);
+    RegisterProperty('PromptLabels', 'TNewStaticText NativeInt', iptr);
     RegisterProperty('SubCaptionLabel', 'TNewStaticText', iptr);
-    RegisterProperty('Values', 'String Integer', iptrw);
-    RegisterProperty('IsSaveButton', 'Boolean Integer', iptrw);
+    RegisterProperty('Values', 'String NativeInt', iptrw);
+    RegisterProperty('IsSaveButton', 'Boolean NativeInt', iptrw);
   end;
 end;
 
@@ -700,7 +709,7 @@ begin
   RegisterStartMenuFolderTreeView_C(Cl);
   RegisterBitmapButton_C(Cl);
   RegisterBitmapImage_C(Cl);
-  RegisterBidiCtrls_C(Cl);
+  RegisterNewCtrls_C(Cl);
 
   RegisterNewNotebook_C(Cl);
   RegisterNewNotebookPage_C(Cl);

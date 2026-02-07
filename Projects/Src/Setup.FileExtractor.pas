@@ -2,7 +2,7 @@ unit Setup.FileExtractor;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -32,7 +32,7 @@ type
     FCryptKeySet: Boolean;
     FEntered: Integer;
     procedure DecompressBytes(var Buffer; Count: Cardinal);
-    class function FindSliceFilename(const ASlice: Integer): String;
+    class function FindSliceFilename(const ASlice: Integer): String; static;
     procedure OpenSlice(const ASlice: Integer);
     function ReadProc(var Buf; Count: Cardinal): Cardinal;
     procedure SetCryptKey(const Value: TSetupEncryptionKey);
@@ -223,8 +223,6 @@ procedure TFileExtractor.SeekTo(const FL: TSetupFileLocationEntry;
     end;
   end;
 
-var
-  TestCompID: TCompID;
 begin
   if FEntered <> 0 then
     InternalError('Cannot call file extractor recursively');
@@ -247,9 +245,10 @@ begin
       OpenSlice(FL.FirstSlice);
 
       FSourceF.Seek(SetupLdrOffset1 + FL.StartOffset);
+      var TestCompID: TCompID;
       if FSourceF.Read(TestCompID, SizeOf(TestCompID)) <> SizeOf(TestCompID) then
         SourceIsCorrupted('Failed to read CompID');
-      if Longint(TestCompID) <> Longint(ZLIBID) then
+      if TestCompID <> ZLIBID then
         SourceIsCorrupted('Invalid CompID');
 
       FChunkFirstSlice := FL.FirstSlice;
@@ -285,7 +284,7 @@ begin
   Buffer := @Buf;
   Left := Count;
   if FChunkBytesLeft < Left then
-    Left := FChunkBytesLeft;
+    Left := Cardinal(FChunkBytesLeft);
   Result := Left;
   while Left <> 0 do begin
     Res := FSourceF.Read(Buffer^, Left);
@@ -299,7 +298,7 @@ begin
       Break
     else begin
       Dec(Left, Res);
-      Inc(Longint(Buffer), Res);
+      Inc(PByte(Buffer), Res);
       { Go to next disk }
       if FOpenedSlice >= FChunkLastSlice then
         { Already on the last slice, so the file must be corrupted... }

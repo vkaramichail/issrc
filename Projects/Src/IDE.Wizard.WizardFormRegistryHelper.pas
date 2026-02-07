@@ -45,7 +45,7 @@ type
 implementation
 
 uses
-  Windows, Classes, SysUtils, StrUtils, TypInfo, Graphics, UITypes,
+  Windows, ShLwApi, Classes, SysUtils, StrUtils, TypInfo, Graphics, UITypes,
   ComCtrls, BrowseFunc,
   IDE.MainForm, IDE.ImagesModule, IDE.HelperFunc, IDE.Messages, Shared.CommonFunc, IDE.HtmlHelpFunc;
 
@@ -61,7 +61,7 @@ procedure TWizardFormRegistryHelper.UpdateImages;
 
   function GetImage(const Button: TToolButton; const WH: Integer): TWICImage;
   begin
-    Result := ImagesModule.LightToolBarImageCollection.GetSourceImage(Button.ImageIndex, WH, WH)
+    Result := ImagesModule.ToolbarImageCollection[InitFormThemeIsDark].GetSourceImage(Button.ImageIndex, WH, WH)
   end;
 
 begin
@@ -91,7 +91,7 @@ begin
   MinVerDocBitBtn.OnClick := MinVerDocBitBtnClick;
   MinVerDocBitBtn.Cursor := crHandPoint;
 
-  TryEnableAutoCompleteFileSystem(FileEdit.Handle);
+  SHAutoComplete(FileEdit.Handle, SHACF_FILESYSTEM);
 
   Form.OnAfterMonitorDpiChanged := AfterMonitorDpiChanged;
   UpdateImages;
@@ -127,7 +127,7 @@ end;
 procedure TWizardFormRegistryHelper.MinVerDocBitBtnClick(Sender: TObject);
 begin
   if Assigned(HtmlHelp) then
-    HtmlHelp(GetDesktopWindow, PChar(GetHelpFile), HH_DISPLAY_TOPIC, Cardinal(PChar('topic_winvernotes.htm')));
+    HtmlHelp(GetDesktopWindow, PChar(GetHelpFile), HH_DISPLAY_TOPIC, DWORD_PTR(PChar('topic_winvernotes.htm')));
 end;
 
 procedure TWizardFormRegistryHelper.AddScript(var Registry: String;
@@ -173,7 +173,7 @@ procedure TWizardFormRegistryHelper.AddScript(var Registry: String;
     var idx := 0;
     while i <= HexStr.Length do
     begin
-      UTF16LEBytes[idx] := StrToInt('$' + HexStr[i] + HexStr[i + 1]);
+      UTF16LEBytes[idx] := Byte(StrToInt('$' + HexStr[i] + HexStr[i + 1]));
       i := i + 2;
       idx := idx + 1;
     end;

@@ -2,7 +2,7 @@ unit Setup.Uninstall;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -17,12 +17,13 @@ procedure HandleUninstallerEndSession;
 implementation
 
 uses
-  Windows, SysUtils, Messages, Forms, Themes, PathFunc, Shared.CommonFunc.Vcl,
-  Shared.CommonFunc, Setup.UninstallLog, SetupLdrAndSetup.Messages,
+  Windows, SysUtils, Messages, Forms, Themes, Graphics,
+  PathFunc, NewCtrls, UnsignedFunc, FormBackgroundStyleHook,
+  Shared.CommonFunc, Shared.CommonFunc.Vcl, Setup.UninstallLog, SetupLdrAndSetup.Messages,
   Shared.SetupMessageIDs, SetupLdrAndSetup.InstFunc, Setup.InstFunc, Shared.Struct,
   Shared.SetupEntFunc, Setup.UninstallProgressForm, Setup.UninstallSharedFileForm,
   Shared.FileClass, Setup.ScriptRunner, Setup.DebugClient, Shared.SetupSteps,
-  Setup.LoggingFunc, Setup.MainFunc, Setup.SpawnServer;
+  Setup.LoggingFunc, Setup.MainFunc, Setup.SpawnServer, Setup.SetupForm;
 
 type
   TExtUninstallLog = class(TUninstallLog)
@@ -40,20 +41,20 @@ const
   WM_KillFirstPhase = WM_USER + 333;
 
 var
-  UninstallExitCode: DWORD = 1;
+  UninstallExitCode: Integer = 1;
   UninstExeFilename, UninstDataFilename, UninstMsgFilename: String;
   UninstDataFile: TFile;
   UninstLog: TExtUninstallLog = nil;
   Title: String;
   DidRespawn, SecondPhase: Boolean;
-  EnableLogging, Silent, VerySilent, NoRestart: Boolean;
+  EnableLogging, Silent, VerySilent, NoRestart, KeepExeDatMsgFiles: Boolean;
   LogFilename: String;
   InitialProcessWnd, FirstPhaseWnd, DebugServerWnd: HWND;
   OldWindowProc: Pointer;
 
 procedure ShowExceptionMsg;
 begin
-  { Also see ShowExceptionMsg in Setup.inc }
+  { Also see ShowExceptionMsg in Setup.Start.pas }
   if ExceptObject is EAbort then
     Exit;
   const Msg = GetExceptMessage;
@@ -80,7 +81,7 @@ begin
   else begin
     if not FNoSharedFileDlgs then begin
       { FNoSharedFileDlgs will be set to True if a "...to All" button is clicked }
-      FRemoveSharedFiles := ExecuteRemoveSharedFileDlg(Filename,
+      FRemoveSharedFiles := ExecuteRemoveSharedFileDlg(PathConvertSuperToNormal(Filename),
         FNoSharedFileDlgs);
       LogFmt('Remove shared file %s? User chose %s%s', [Filename, SYesNo[FRemoveSharedFiles], SToAll[FNoSharedFileDlgs]]);
     end;
@@ -88,11 +89,10 @@ begin
   end;
 end;
 
-procedure InitializeUninstallProgressForm(const MainIconPostfix, WizardIconsPostfix: String);
+procedure InitializeUninstallProgressForm;
 begin
   UninstallProgressForm := AppCreateForm(TUninstallProgressForm) as TUninstallProgressForm;
-  UninstallProgressForm.Initialize(Title, UninstLog.AppName, ufWizardModern in UninstLog.Flags,
-    MainIconPostfix, WizardIconsPostfix);
+  UninstallProgressForm.Initialize(Title, UninstLog.AppName);
   if CodeRunner <> nil then begin
     try
       CodeRunner.RunProcedures('InitializeUninstallProgressForm', [''], False);
@@ -126,7 +126,7 @@ begin
 end;
 
 function LoggedMessageBoxFmt1(const ID: TSetupMessageID; const Arg1: String;
-  const Title: String; const Flags: UINT; const Suppressible: Boolean;
+  const Title: String; const Flags: Cardinal; const Suppressible: Boolean;
   const Default: Integer): Integer;
 begin
   Result := LoggedMsgBox(PChar(FmtSetupMessage1(ID, Arg1)), PChar(Title),
@@ -192,6 +192,32 @@ begin
 end;
 
 procedure DeleteUninstallDataFiles;
+
+  procedure CreateUninstallDoneFile;
+  { Creates the _unins-done.tmp file, which is an empty file that signals to
+    DeleteResidualTempUninstallDirs that the temporary directory needs to be
+    deleted, because we're terminating the first phase. }
+  begin
+    const SelfExeFilename = NewParamStr(0);
+    if not SameText(PathExtractName(SelfExeFilename), '_unins.tmp') then begin
+      { This may be the case when debugging }
+      Log('Current Uninstall EXE is not named "_unins.tmp"; not creating "_unins-done.tmp".');
+      Exit;
+    end;
+
+    const DoneFilename = PathExtractPath(SelfExeFilename) + '_unins-done.tmp';
+
+    Log('Creating "_unins-done.tmp" file.');
+    const H = CreateFile(PChar(DoneFilename), GENERIC_WRITE, FILE_SHARE_READ,
+      nil, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+    if H = INVALID_HANDLE_VALUE then
+      LogWithLastError('Failed to create "_unins-done.tmp".');
+    { The file is intentionally never closed (until it gets closed
+      automatically when this process terminates) so that it can't be opened
+      for DELETE access by DeleteResidualTempUninstallDirs while we're still
+      running; see comments there. }
+  end;
+
 var
   ProcessWnd: HWND;
   ProcessID: DWORD;
@@ -199,21 +225,27 @@ var
 begin
   Log('Deleting Uninstall data files.');
 
-  { Truncate the .dat file to zero bytes just before relinquishing exclusive
-    access to it }
-  try
-    UninstDataFile.Seek(0);
-    UninstDataFile.Truncate;
-  except
-    { ignore any exceptions, just in case }
+  if not KeepExeDatMsgFiles then begin
+    { Truncate the .dat file to zero bytes just before relinquishing exclusive
+      access to it }
+    try
+      UninstDataFile.Seek(0);
+      UninstDataFile.Truncate;
+    except
+      { ignore any exceptions, just in case }
+    end;
   end;
+
   FreeAndNil(UninstDataFile);
 
   { Delete the .dat and .msg files }
-  DeleteFile(UninstDataFilename);
-  DeleteFile(UninstMsgFilename);
+  if not KeepExeDatMsgFiles then begin
+    DeleteFile(UninstDataFilename);
+    DeleteFile(UninstMsgFilename);
+  end;
 
   { Tell the first phase to terminate, then delete its .exe }
+  CreateUninstallDoneFile;
   if FirstPhaseWnd <> 0 then begin
     if InitialProcessWnd <> 0 then
       { If the first phase respawned, wait on the initial process }
@@ -237,7 +269,8 @@ begin
       Sleep(500);
   end;
   UninstallExitCode := 0;
-  DelayDeleteFile(False, UninstExeFilename, 13, 50, 250);
+  if not KeepExeDatMsgFiles then
+    DelayDeleteFile(UninstExeFilename, 13, 50, 250);
   if Debugging then
     DebugNotifyUninstExe('');
   { Pre-Windows 2000 Add/Remove Programs will try to bring itself to the
@@ -261,35 +294,42 @@ begin
   for I := 1 to NewParamCount do begin
     SplitNewParamStr(I, ParamName, ParamValue);
     ParamIsAutomaticInternal := False;
-    if CompareText(ParamName, '/Log') = 0 then begin
+    if SameText(ParamName, '/Log') then begin
       EnableLogging := True;
       LogFilename := '';
-    end else if CompareText(ParamName, '/Log=') = 0 then begin
+    end else if SameText(ParamName, '/Log=') then begin
       EnableLogging := True;
       LogFilename := ParamValue;
-    end else if CompareText(ParamName, '/INITPROCWND=') = 0 then begin
+    end else if SameText(ParamName, '/INITPROCWND=') then begin
       ParamIsAutomaticInternal := True;
       DidRespawn := True;
-      InitialProcessWnd := StrToInt(ParamValue);
-    end else if CompareText(ParamName, '/SECONDPHASE=') = 0 then begin
+      InitialProcessWnd := StrToWnd(ParamValue);
+    end else if SameText(ParamName, '/SECONDPHASE=') then begin
       ParamIsAutomaticInternal := True;
       SecondPhase := True;
       UninstExeFilename := ParamValue;
-    end else if CompareText(ParamName, '/FIRSTPHASEWND=') = 0 then begin
+    end else if SameText(ParamName, '/FIRSTPHASEWND=') then begin
       ParamIsAutomaticInternal := True;
-      FirstPhaseWnd := StrToInt(ParamValue)
-    end else if CompareText(ParamName, '/SILENT') = 0 then
+      FirstPhaseWnd := StrToWnd(ParamValue)
+    end else if SameText(ParamName, '/SILENT') then
       Silent := True
-    else if CompareText(ParamName, '/VERYSILENT') = 0 then
+    else if SameText(ParamName, '/VERYSILENT') then
       VerySilent := True
-    else if CompareText(ParamName, '/NoRestart') = 0 then
+    else if SameText(ParamName, '/NoRestart') then
       NoRestart := True
-    else if CompareText(ParamName, '/SuppressMsgBoxes') = 0 then
+    else if SameText(ParamName, '/NoStyle') then
+      InitNoStyle := True
+    else if SameText(ParamName, '/RedirectionGuard') then
+      InitRedirectionGuard := True
+    else if SameText(ParamName, '/NoRedirectionGuard') then
+      InitNoRedirectionGuard := True
+    else if SameText(ParamName, '/SuppressMsgBoxes') then
       WantToSuppressMsgBoxes := True
-    else if CompareText(ParamName, '/DEBUGWND=') = 0 then begin
+    else if SameText(ParamName, '/DEBUGWND=') then begin
       ParamIsAutomaticInternal := True;
-      DebugServerWnd := StrToInt(ParamValue);
-    end;
+      DebugServerWnd := StrToWnd(ParamValue);
+    end else if SameText(ParamName, '/KEEPEXEDATMSG') then { for debugging }
+      KeepExeDatMsgFiles := True;
     if not ParamIsAutomaticInternal then
       NewParamsForCode.Add(NewParamStr(I));
   end;
@@ -349,60 +389,75 @@ begin
   RequireAdmin := (ufAdminInstalled in Flags) or (ufPowerUserInstalled in Flags);
 
   if NeedToRespawnSelfElevated(RequireAdmin, False) then begin
+    { The UInt32 cast prevents sign extension }
     RespawnSelfElevated(UninstExeFilename,
-      Format('/INITPROCWND=$%x ', [Application.Handle]) + GetCmdTail,
-      UninstallExitCode);
+      Format('/INITPROCWND=$%x ', [UInt32(Application.Handle)]) + GetCmdTail,
+      nil, UninstallExitCode);
     Result := True;
   end;
 end;
 
 procedure RunFirstPhase;
-var
-  TempDir, TempFile: String;
-  TempDirExisted: Boolean;
-  Wnd: HWND;
-  ProcessHandle: THandle;
 begin
   { Copy self to a subdirectory of the TEMP directory with a name like
     _iu14D2N.tmp. The actual uninstallation process must be done from
     somewhere outside the application directory since EXE's can't delete
     themselves while they are running. }
-  TempDirExisted := GenerateNonRandomUniqueTempDir(IsAdmin, GetTempDir, TempDir);
-  TempFile := AddBackslash(TempDir) + '_unins.tmp';
-  if not TempDirExisted then
-    try
-      RestartReplace(False, TempFile, '');
-      RestartReplace(False, TempDir, '');
-    except
-      { ignore exceptions }
-    end;
-  if not CopyFile(PChar(UninstExeFilename), PChar(TempFile), False) then
-    RaiseLastError(SetupMessages[msgLdrCannotCreateTemp]);
-  { Don't want any attribute like read-only transferred }
-  SetFileAttributes(PChar(TempFile), FILE_ATTRIBUTE_NORMAL);
-
-  { Create first phase window. This window waits for a WM_KillFirstPhase
-    message from the second phase process, and terminates itself in
-    response. The reason the first phase doesn't just terminate
-    immediately is because the Control Panel Add/Remove applet refreshes
-    its list as soon as the program terminates. So it waits until the
-    uninstallation is complete before terminating. }
-  Wnd := CreateWindowEx(0, 'STATIC', '', 0, 0, 0, 0, 0, HWND_DESKTOP, 0,
-    HInstance, nil);
-  Longint(OldWindowProc) := SetWindowLong(Wnd, GWL_WNDPROC,
-    Longint(@FirstPhaseWindowProc));
+  var Wnd: HWND := 0;
+  var ProcessHandle: THandle := 0;
+  var ShouldDeleteTempDir := True;
+  const TempDir = CreateTempDir('-uninstall.tmp', IsAdmin);
+  const TempFile = AddBackslash(TempDir) + '_unins.tmp';
   try
-    { Execute the copy of itself ("second phase") }
+    if not CopyFile(PChar(UninstExeFilename), PChar(TempFile), False) then
+      RaiseLastError(SetupMessages[msgLdrCannotCreateTemp]);
+    { Don't want any attribute like read-only transferred }
+    SetFileAttributes(PChar(TempFile), FILE_ATTRIBUTE_NORMAL);
+
+    { Create first phase window. This window waits for a WM_KillFirstPhase
+      message from the second phase process, and terminates itself in
+      response. The reason the first phase doesn't just terminate
+      immediately is because the Control Panel Add/Remove applet refreshes
+      its list as soon as the program terminates. So it waits until the
+      uninstallation is complete before terminating. }
+    Wnd := CreateWindowEx(0, 'STATIC', '', 0, 0, 0, 0, 0, HWND_DESKTOP, 0,
+      HInstance, nil);
+    LONG_PTR(OldWindowProc) := SetWindowLongPtr(Wnd, GWLP_WNDPROC,
+      LONG_PTR(@FirstPhaseWindowProc));
+
+    { Execute the copy of itself ("second phase"). The UInt32 cast prevents
+      sign extension }
     ProcessHandle := Exec(TempFile, Format('/SECONDPHASE="%s" /FIRSTPHASEWND=$%x ',
-      [NewParamStr(0), Wnd]) + GetCmdTail);
+      [NewParamStr(0), UInt32(Wnd)]) + GetCmdTail);
+    ShouldDeleteTempDir := False;
 
     { Wait till the second phase process unexpectedly dies or is ready
       for the first phase to terminate. }
-    repeat until ProcessMsgs or (MsgWaitForMultipleObjects(1,
-      ProcessHandle, False, INFINITE, QS_ALLINPUT) <> WAIT_OBJECT_0+1);
-    CloseHandle(ProcessHandle);
+    while not ProcessMsgs do begin
+      const WaitResult = MsgWaitForMultipleObjects(1, ProcessHandle, False,
+        INFINITE, QS_ALLINPUT);
+      if WaitResult <> WAIT_OBJECT_0 + 1 then begin
+        { When the second phase process terminates without us receiving a
+          WM_KillFirstPhase message -- which most commonly happens when the
+          user clicks No on the confirmation dialog -- it is our
+          responsibility to delete TempDir.
+          We also break here if WaitResult is something unexpected like
+          WAIT_FAILED, but don't attempt to delete TempDir in that case
+          because we don't know the status of the second phase process. }
+        if WaitResult = WAIT_OBJECT_0 then
+          ShouldDeleteTempDir := True;
+        Break;
+      end;
+    end;
   finally
-    DestroyWindow(Wnd);
+    if ProcessHandle <> 0 then
+      CloseHandle(ProcessHandle);
+    if Wnd <> 0 then
+      DestroyWindow(Wnd);
+    if ShouldDeleteTempDir then begin
+      DelayDeleteFile(TempFile, 13, 50, 250);
+      RemoveDirectory(PChar(TempDir));
+    end;
   end;
 end;
 
@@ -417,9 +472,9 @@ procedure AssignCustomMessages(AData: Pointer; ADataSize: Cardinal);
   begin
     if Count > ADataSize then
       Corrupted;
-    Move(AData^, Buf, Count);
+    UMove(AData^, Buf, Count);
     Dec(ADataSize, Count);
-    Inc(Cardinal(AData), Count);
+    Inc(PByte(AData), Count);
   end;
 
   procedure ReadString(var S: String);
@@ -431,7 +486,7 @@ procedure AssignCustomMessages(AData: Pointer; ADataSize: Cardinal);
       Corrupted;
     SetString(S, nil, N);
     if N <> 0 then
-      Read(Pointer(S)^, N * SizeOf(S[1]));
+      Read(Pointer(S)^, Cardinal(N * SizeOf(S[1])));
   end;
 
 var
@@ -490,9 +545,10 @@ begin
         end;
       end;
     end;
-    Log('Setup version: ' + SetupTitle + ' version ' + SetupVersion);
+    LogSetupVersion;
     Log('Original Uninstall EXE: ' + UninstExeFilename);
     Log('Uninstall DAT: ' + UninstDataFilename);
+    LogFmt('Current Uninstall EXE: %s', [NewParamStr(0)]);
     Log('Uninstall command line: ' + GetCmdTail);
     LogWindowsVersion;
 
@@ -504,31 +560,43 @@ begin
     UninstLog.Load(UninstDataFile, UninstDataFilename);
 
     { Apply style - also see Setup.MainFunc's InitializeSetup }
-    var MainIconPostfix := '';
-    var WizardIconsPostfix := '';
     IsWinDark := DarkModeActive;
-    const IsDynamicDark = (ufWizardDarkStyleDynamic in UninstLog.Flags) and IsWinDark;
-    const IsForcedDark = (ufWizardDarkStyleDark in UninstLog.Flags);
-    if IsDynamicDark then
-      MainIconPostfix := '_DARK';
-    if IsDynamicDark or IsForcedDark then begin
-      IsDarkInstallMode := True;
-      WizardIconsPostfix := '_DARK';
-    end;
-    if not HighContrastActive then begin
+    if not HighContrastActive and not InitNoStyle then begin
+      const IsDynamicDark = (lfWizardDarkStyleDynamic in MessagesLangOptions.Flags) and IsWinDark;
+      const IsForcedDark = lfWizardDarkStyleDark in MessagesLangOptions.Flags;
+      if IsDynamicDark then begin
+        SetupHeader.WizardBackColor := SetupHeader.WizardBackColorDynamicDark;
+        MainIconPostfix := '_DARK';
+        if FindResource(HInstance, PChar('MAINICON' + MainIconPostfix), RT_GROUP_ICON) = 0 then
+          MainIconPostfix := '';
+      end;
+      if IsDynamicDark or IsForcedDark then begin
+        IsDarkInstallMode := True;
+        WizardIconsPostfix := '_DARK';
+      end;
+      TStyleManager.AutoDiscoverStyleResources := False;
       var StyleName := 'MYSTYLE1';
       if IsDynamicDark then
         StyleName := StyleName + '_DARK';
       var Handle: TStyleManager.TStyleServicesHandle;
-      if TStyleManager.TryLoadFromResource(HInstance, StyleName, 'VCLSTYLE', Handle) then
+      if TStyleManager.TryLoadFromResource(HInstance, StyleName, 'VCLSTYLE', Handle)
+      {$IFDEF DEBUG}
+         or TStyleManager.TryLoadFromResource(HInstance, 'ZIRCON', 'VCLSTYLE', Handle)
+         { Comment the line above to activate WINDOWSPOLARDARK instead of ZIRCON }
+         or TStyleManager.TryLoadFromResource(HInstance, 'WINDOWSPOLARDARK', 'VCLSTYLE', Handle)
+      {$ENDIF }
+      then begin
         TStyleManager.SetStyle(Handle);
+        if not (shWizardBorderStyled in SetupHeader.Options) then
+          TStyleManager.FormBorderStyle := fbsSystemStyle;
+        CustomWizardBackground := (SetupHeader.WizardBackColor <> clNone) and
+          (SetupHeader.WizardBackColor <> clWindow); { Unlike Setup, Uninstall doesn't support background images which is why this extra check is here }
+        if CustomWizardBackground then begin
+          TCustomStyleEngine.RegisterStyleHook(TSetupForm, TFormBackgroundStyleHook);
+          TFormBackgroundStyleHook.BackColor := SetupHeader.WizardBackColor;
+        end;
+      end;
     end;
-
-    { Initialize SetupHeader items used by TSetupForm (LangOptions items already done) }
-    if ufWizardBorderStyled in UninstLog.Flags then
-      Include(SetupHeader.Options, shWizardBorderStyled);
-    SetupHeader.WizardSizePercentX := 100;
-    SetupHeader.WizardSizePercentY := 100;
 
     Title := FmtSetupMessage1(msgUninstallAppFullTitle, UninstLog.AppName);
 
@@ -556,7 +624,7 @@ begin
     UninstDataFile := OpenUninstDataFile(faReadWrite);
 
     if not UninstLog.ExtractLatestRecData(utCompiledCode,
-         SetupBinVersion or Longint($80000000), CompiledCodeData) then
+         SetupBinVersion {$IFDEF WIN64} or $80000000 {$ENDIF}, CompiledCodeData) then
       InternalError('Cannot find utCompiledCode record for this version of the uninstaller');
     if DebugServerWnd <> 0 then
       CompiledCodeText := DebugClientCompiledCodeText
@@ -575,13 +643,19 @@ begin
     else
       Initialize64BitInstallMode(False);
 
-    { Create temporary directory and extract 64-bit helper EXE if necessary }
-    CreateTempInstallDirAndExtract64BitHelper;
+    const EnableRedirectionGuard = InitRedirectionGuard or
+      ((ufRedirectionGuard in UninstLog.Flags) and not InitNoRedirectionGuard);
+    RedirectionGuardConfigure(EnableRedirectionGuard);
+
+    DeleteResidualTempUninstallDirs;
+
+    { Create temporary directory }
+    CreateTempInstallDir;
 
     if CompiledCodeText <> '' then begin
       { Setup some global variables which are accessible to [Code] }
 
-      InitMainNonSHFolderConsts;
+      InitMainNonSHFolderConstsAndPathRedir;
       LoadSHFolderDLL;
 
       UninstallExeFilename := UninstExeFilename;
@@ -592,7 +666,7 @@ begin
       UninstallExpandedGroup := CompiledCodeData[3];
       UninstallExpandedGroupName := CompiledCodeData[4];
       UninstallExpandedLanguage := CompiledCodeData[5];
-      AssignCustomMessages(Pointer(CompiledCodeData[6]), Length(CompiledCodeData[6])*SizeOf(CompiledCodeData[6][1]));
+      AssignCustomMessages(Pointer(CompiledCodeData[6]), ULength(CompiledCodeData[6])*SizeOf(CompiledCodeData[6][1]));
 
       CodeRunner := TScriptRunner.Create();
       CodeRunner.NamingAttribute := CodeRunnerNamingAttribute;
@@ -647,7 +721,7 @@ begin
           FmtSetupMessage1(msgShutdownBlockReasonUninstallingApp, UninstLog.AppName));
 
         { Create and show the progress form }
-        InitializeUninstallProgressForm(MainIconPostfix, WizardIconsPostfix);
+        InitializeUninstallProgressForm;
 
         CurUninstallStepChanged(usUninstall, False);
 
@@ -791,7 +865,18 @@ begin
     end;
     LangOptions.DialogFontName := MessagesLangOptions.DialogFontName;
     LangOptions.DialogFontSize := MessagesLangOptions.DialogFontSize;
+    LangOptions.DialogFontBaseScaleWidth := MessagesLangOptions.DialogFontBaseScaleWidth;
+    LangOptions.DialogFontBaseScaleHeight := MessagesLangOptions.DialogFontBaseScaleHeight;
     LangOptions.RightToLeft := lfRightToLeft in MessagesLangOptions.Flags;
+    if lfWizardBorderStyled in MessagesLangOptions.Flags then
+      Include(SetupHeader.Options, shWizardBorderStyled);
+    if lfWizardKeepAspectRatio in MessagesLangOptions.Flags then
+      Include(SetupHeader.Options, shWizardKeepAspectRatio);
+    SetupHeader.WizardSizePercentX := MessagesLangOptions.WizardSizePercentX;
+    SetupHeader.WizardSizePercentY := MessagesLangOptions.WizardSizePercentY;
+    SetupHeader.WizardBackColor := MessagesLangOptions.WizardBackColor;
+    SetupHeader.WizardBackColorDynamicDark := MessagesLangOptions.WizardBackColorDynamicDark;
+    SetupHeader.WizardLightControlStyling := MessagesLangOptions.WizardLightControlStyling;
     SetMessageBoxRightToLeft(LangOptions.RightToLeft);
     SetMessageBoxCaption(mbInformation, PChar(SetupMessages[msgInformationTitle]));
     SetMessageBoxCaption(mbConfirmation, PChar(SetupMessages[msgConfirmTitle]));
@@ -820,7 +905,8 @@ begin
     the IDE's Debug Output }
   EndDebug;
 
-  Halt(UninstallExitCode);
+  System.ExitCode := UninstallExitCode;
+  Halt;
 end;
 
 procedure HandleUninstallerEndSession;
@@ -839,8 +925,8 @@ begin
 
     EndDebug;
 
-    { Don't use Halt. See Setup.dpr }
-    TerminateProcess(GetCurrentProcess, UninstallExitCode);
+    { Don't use Halt. See Setup.Start.pas WM_ENDSESSION }
+    TerminateProcess(GetCurrentProcess, UINT(UninstallExitCode));
   end;
 end;
 

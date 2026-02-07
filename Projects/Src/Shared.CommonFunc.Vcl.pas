@@ -30,8 +30,12 @@ type
   { Note: This type is also present in Compiler.ScriptFunc.pas }
   TMsgBoxType = (mbInformation, mbConfirmation, mbError, mbCriticalError);
 
-  TMsgBoxCallbackFunc = procedure(const Flags: Integer; const After: Boolean;
-    const Param: LongInt);
+  TMsgBoxCallbackFunc = procedure(const Flags: Cardinal; const After: Boolean;
+    const Param: NativeInt);
+
+  TControlHelper = class helper for TControl
+    procedure SetCurrentPPI(const CurrentPPI: Integer);
+  end;
 
 { Useful constant }
 const
@@ -41,7 +45,7 @@ function AppCreateForm(const AClass: TCustomFormClass): TCustomForm;
 procedure UpdateHorizontalExtent(const ListBox: TCustomListBox);
 function MinimizePathName(const Filename: String; const Font: TFont;
   MaxLen: Integer): String;
-function MsgBox(const Text, Caption: PChar; Flags: Integer): Integer; overload;
+function MsgBox(const Text, Caption: PChar; Flags: Cardinal): Integer; overload;
 function MsgBox(const Text, Caption: String; const Typ: TMsgBoxType;
   const Buttons: Cardinal): Integer; overload;
 function MsgBoxFmt(const Text: String; const Args: array of const;
@@ -50,8 +54,8 @@ procedure SetMessageBoxCaption(const Typ: TMsgBoxType; const NewCaption: PChar);
 function GetMessageBoxCaption(const Caption: PChar; const Typ: TMsgBoxType): PChar;
 procedure SetMessageBoxRightToLeft(const ARightToLeft: Boolean);
 function GetMessageBoxRightToLeft: Boolean;
-procedure SetMessageBoxCallbackFunc(const AFunc: TMsgBoxCallbackFunc; const AParam: LongInt);
-procedure TriggerMessageBoxCallbackFunc(const Flags: Integer; const After: Boolean);
+procedure SetMessageBoxCallbackFunc(const AFunc: TMsgBoxCallbackFunc; const AParam: NativeInt);
+procedure TriggerMessageBoxCallbackFunc(const Flags: Cardinal; const After: Boolean);
 function GetOwnerWndForMessageBox: HWND;
 function IsWindowOnTaskbar(const Wnd: HWND): Boolean;
 procedure SetDarkTitleBar(const Form: TForm; const Dark: Boolean);
@@ -63,8 +67,8 @@ implementation
 {$IFEND}
 
 uses
-  DwmApi, Consts, PathFunc,
-  {$IFDEF USETASKDIALOGFORM} CommCtrl, Themes, Setup.TaskDialogForm, {$ENDIF}
+  DwmApi, Consts, PathFunc, Themes,
+  {$IFDEF USETASKDIALOGFORM} CommCtrl, Setup.TaskDialogForm, {$ENDIF}
   {$IFDEF SETUPPROJ} Setup.InstFunc, {$ENDIF}
   Shared.CommonFunc;
 
@@ -72,7 +76,7 @@ var
   MessageBoxCaptions: array[TMsgBoxType] of PChar;
   MessageBoxRightToLeft: Boolean;
   MessageBoxCallbackFunc: TMsgBoxCallbackFunc;
-  MessageBoxCallbackParam: LongInt;
+  MessageBoxCallbackParam: NativeInt;
   MessageBoxCallbackActive: Boolean;
 
 function AppCreateForm(const AClass: TCustomFormClass): TCustomForm;
@@ -213,13 +217,13 @@ begin
   Result := MessageBoxRightToLeft;
 end;
 
-procedure SetMessageBoxCallbackFunc(const AFunc: TMsgBoxCallbackFunc; const AParam: LongInt);
+procedure SetMessageBoxCallbackFunc(const AFunc: TMsgBoxCallbackFunc; const AParam: NativeInt);
 begin
   MessageBoxCallbackFunc := AFunc;
   MessageBoxCallbackParam := AParam;
 end;
 
-procedure TriggerMessageBoxCallbackFunc(const Flags: Integer; const After: Boolean);
+procedure TriggerMessageBoxCallbackFunc(const Flags: Cardinal; const After: Boolean);
 begin
   if Assigned(MessageBoxCallbackFunc) and not MessageBoxCallbackActive then begin
     MessageBoxCallbackActive := True;
@@ -280,14 +284,20 @@ begin
     Unlike this article we check for Windows 10 Version 2004 because that's the first version
     that introduced DWMWA_USE_IMMERSIVE_DARK_MODE as 20 (the now documented value) instead of 19 }
   if CurrentWindowsVersionAtLeast(10, 0, 19041) then begin
-    Form.StyleElements := Form.StyleElements - [seBorder];
-    const DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    if TStyleManager.FormBorderStyle = fbsCurrentStyle then
+      Form.StyleElements := Form.StyleElements - [seBorder];
+    const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
     var value: BOOL := Dark;
     DwmSetWindowAttribute(Form.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, @value, SizeOf(value));
   end;
 end;
 
-function MsgBox(const Text, Caption: PChar; Flags: Integer): Integer;
+{$IFDEF USETASKDIALOGFORM}
+var
+  MsgBoxTaskDialogFormActive: Boolean;
+{$ENDIF}
+
+function MsgBox(const Text, Caption: PChar; Flags: Cardinal): Integer;
 
 {$IFDEF USETASKDIALOGFORM}
   procedure DoInternalError(const Msg: String);
@@ -299,7 +309,7 @@ function MsgBox(const Text, Caption: PChar; Flags: Integer): Integer;
     {$ENDIF}
   end;
 
-  procedure MsgBoxFlagsDecode(const Flags: Integer; out Icon: PChar;
+  procedure MsgBoxFlagsDecode(const Flags: Cardinal; out Icon: PChar;
     out TDCommonButtons: Cardinal; out DefCommonButton: Integer; out SetForeground: Boolean);
   begin
     case Flags and MB_ICONMASK of
@@ -364,25 +374,32 @@ begin
   TriggerMessageBoxCallbackFunc(Flags, False);
   try
     {$IFDEF USETASKDIALOGFORM}
-    { We don't use MB_ABORTRETRYIGNORE or MB_CANCELTRYCONTINUE, but end users
-      are liable to in [Code]. TaskDialogForm doesn't support them because
-      currently we lack the strings needed for the required common buttons. }
-    const Typ = (Flags and MB_TYPEMASK);
-    const MB_CANCELTRYCONTINUE = $00000006;
-    if (Typ <> MB_ABORTRETRYIGNORE) and (Typ <> MB_CANCELTRYCONTINUE) then begin
-      const LStyle = TStyleManager.ActiveStyle;
-      if not LStyle.IsSystemStyle then begin
-        var Icon: PChar;
-        var TDCommonButtons: Cardinal;
-        var DefCommonButton: Integer;
-        var SetForeground: Boolean;
-        { Ignores MB_DEFBUTTON4 (there are never 4 buttons) and MB_RTLREADING+MB_RIGHT
-          (TaskDialogForm has its own RTL detection) }
-        MsgBoxFlagsDecode(Flags, Icon, TDCommonButtons, DefCommonButton, SetForeground);
-        { Note: Shared.TaskDialogFunc also uses TaskDialogForm }
-        Result := TaskDialogForm('', Text, Caption, Icon, TDCommonButtons, [], [], DefCommonButton, 0,
-          Flags, '', nil, cfMessageBox, SetForeground);
-        Exit;
+    if not MsgBoxTaskDialogFormActive then begin { Protect against TaskDialogForm calling MsgBox }
+      MsgBoxTaskDialogFormActive := True;
+      try
+        { We don't use MB_ABORTRETRYIGNORE or MB_CANCELTRYCONTINUE, but end users
+          are liable to in [Code]. TaskDialogForm doesn't support them because
+          currently we lack the strings needed for the required common buttons. }
+        const Typ = (Flags and MB_TYPEMASK);
+        const MB_CANCELTRYCONTINUE = $00000006;
+        if (Typ <> Cardinal(MB_ABORTRETRYIGNORE)) and (Typ <> Cardinal(MB_CANCELTRYCONTINUE)) then begin
+          const LStyle = TStyleManager.ActiveStyle;
+          if not LStyle.IsSystemStyle then begin
+            var Icon: PChar;
+            var TDCommonButtons: Cardinal;
+            var DefCommonButton: Integer;
+            var SetForeground: Boolean;
+            { Ignores MB_DEFBUTTON4 (there are never 4 buttons) and MB_RTLREADING+MB_RIGHT
+              (TaskDialogForm has its own RTL detection) }
+            MsgBoxFlagsDecode(Flags, Icon, TDCommonButtons, DefCommonButton, SetForeground);
+            { Note: Shared.TaskDialogFunc also uses TaskDialogForm }
+            Result := TaskDialogForm('', Text, Caption, Icon, TDCommonButtons, [], [], DefCommonButton, 0,
+              Flags, '', nil, cfMessageBox, SetForeground);
+            Exit;
+          end;
+        end;
+      finally
+        MsgBoxTaskDialogFormActive := False;
       end;
     end;
     {$ENDIF}
@@ -454,7 +471,7 @@ begin
       Exit;
     end;
 
-    Result := Application.MessageBox(Text, Caption, Flags);
+    Result := Application.MessageBox(Text, Caption, Integer(Flags));
   finally
     TriggerMessageBoxCallbackFunc(Flags, True);
   end;
@@ -570,6 +587,13 @@ begin
   if FOwnerWnd <> 0 then
     DestroyWindow(FOwnerWnd);  { will destroy FFallbackWnd too }
   inherited;
+end;
+
+{ TControlHelper }
+
+procedure TControlHelper.SetCurrentPPI(const CurrentPPI: Integer);
+begin
+  FCurrentPPI := CurrentPPI;
 end;
 
 initialization

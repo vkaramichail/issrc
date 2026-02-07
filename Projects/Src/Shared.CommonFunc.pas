@@ -16,9 +16,6 @@ interface
 uses
   Windows, SysUtils, Classes;
 
-const
-  KEY_WOW64_64KEY = $0100;
-
 type
   TOneShotTimer = record
   private
@@ -44,6 +41,11 @@ type
     class function GenerateUInt32: UInt32; static;
     class function GenerateUInt32Range(const ARange: UInt32): UInt32; static;
     class function GenerateUInt64: UInt64; static;
+  end;
+
+  TFileTimeHelper = record helper for TFileTime
+    procedure Clear;
+    function HasTime: Boolean;
   end;
 
   TLogProc = procedure(const S: String; const Error, FirstLine: Boolean; const Data: NativeInt);
@@ -86,8 +88,18 @@ type
   end;
 
   TRegView = (rvDefault, rv32Bit, rv64Bit);
+
+  TFileOperationFailingNextAction = (naStopAndFail, naStopAndSucceed, naRetry);
+
+  TFileOperationFunc = reference to function(out LastError: Cardinal): Boolean;
+  TFileOperationFailingProc = reference to procedure(const LastError: Cardinal);
+  TFileOperationFailingExProc = reference to procedure(const LastError: Cardinal; var RetriesLeft: Integer; var NextAction: TFileOperationFailingNextAction);
+  TFileOperationFailedProc = reference to procedure(const LastError: Cardinal; var TryOnceMore: Boolean);
+
 const
-  RegViews64Bit = [rv64Bit];
+  IsCurrentProcess64Bit = {$IFDEF WIN64} True {$ELSE} False {$ENDIF};
+
+  RegViews64Bit = [{$IFDEF WIN64} rvDefault, {$ENDIF} rv64Bit];
 
 function NewFileExists(const Name: String): Boolean;
 function DirExists(const Name: String): Boolean;
@@ -110,7 +122,6 @@ function NewParamCount: Integer;
 function NewParamStr(Index: Integer): string;
 function AddQuotes(const S: String): String;
 function RemoveQuotes(const S: String): String;
-function GetShortName(const LongName: String): String;
 function GetWinDir: String;
 function GetSystemWinDir: String;
 function GetSystemDir: String;
@@ -161,57 +172,28 @@ function ShutdownBlockReasonDestroy(Wnd: HWND): Boolean;
 function TryStrToBoolean(const S: String; var BoolResult: Boolean): Boolean;
 procedure WaitMessageWithTimeout(const Milliseconds: DWORD);
 function MoveFileReplace(const ExistingFileName, NewFileName: String): Boolean;
-procedure TryEnableAutoCompleteFileSystem(Wnd: HWND);
 procedure CreateMutex(const MutexName: String);
 function HighContrastActive: Boolean;
 function CurrentWindowsVersionAtLeast(const AMajor, AMinor: Byte; const ABuild: Word = 0): Boolean;
 function DarkModeActive: Boolean;
+function DeleteFileOrDirByHandle(const H: THandle): Boolean;
 function CompareInt64(const N1, N2: Int64): Integer;
 function HighLowToInt64(const High, Low: UInt32): Int64;
+function HighLowToUInt64(const High, Low: UInt32): UInt64;
 function FindDataFileSizeToInt64(const FindData: TWin32FindData): Int64;
+function FileTimeToUInt64(const FileTime: TFileTime): UInt64;
+function StrToWnd(const S: String): HWND;
+function PerformFileOperationWithRetries(const MaxRetries: Integer; const AlsoRetryOnAlreadyExists: Boolean;
+  const Op: TFileOperationFunc; const Failing: TFileOperationFailingProc; const Failed: TFileOperationFailedProc): Boolean; overload;
+function PerformFileOperationWithRetries(const MaxRetries: Integer; const AlsoRetryOnAlreadyExists: Boolean;
+  const Op: TFileOperationFunc; const Failing: TFileOperationFailingExProc; const Failed: TFileOperationFailedProc): Boolean; overload;
+function Is64BitPEImage(const Filename: String): Boolean;
 
 implementation
 
 uses
-  PathFunc, UnsignedFunc;
-
-{ Avoid including Variants (via ActiveX and ShlObj) in SetupLdr (SetupLdr uses CmnFunc2), saving 26 KB. }
-
-const
-  shell32 = 'shell32.dll';
-
-type
-  PSHItemID = ^TSHItemID;
-  _SHITEMID = record
-    cb: Word;                         { Size of the ID (including cb itself) }
-    abID: array[0..0] of Byte;        { The item ID (variable length) }
-  end;
-  TSHItemID = _SHITEMID;
-  SHITEMID = _SHITEMID;
-
-  PItemIDList = ^TItemIDList;
-  _ITEMIDLIST = record
-     mkid: TSHItemID;
-   end;
-  TItemIDList = _ITEMIDLIST;
-  ITEMIDLIST = _ITEMIDLIST;
-
-  IMalloc = interface(IUnknown)
-    ['{00000002-0000-0000-C000-000000000046}']
-    function Alloc(cb: Longint): Pointer; stdcall;
-    function Realloc(pv: Pointer; cb: Longint): Pointer; stdcall;
-    procedure Free(pv: Pointer); stdcall;
-    function GetSize(pv: Pointer): Longint; stdcall;
-    function DidAlloc(pv: Pointer): Integer; stdcall;
-    procedure HeapMinimize; stdcall;
-  end;
-
-function SHGetMalloc(var ppMalloc: IMalloc): HResult; stdcall; external shell32 name 'SHGetMalloc';
-function SHGetSpecialFolderLocation(hwndOwner: HWND; nFolder: Integer;
-  var ppidl: PItemIDList): HResult; stdcall; external shell32 name 'SHGetSpecialFolderLocation';
-function SHGetPathFromIDList(pidl: PItemIDList; pszPath: PChar): BOOL; stdcall;
-  external shell32 name 'SHGetPathFromIDListW';
-
+  PathFunc, UnsignedFunc,
+  Shared.FileClass;
 
 function InternalGetFileAttr(const Name: String): DWORD;
 begin
@@ -676,22 +658,6 @@ begin
   end;
 end;
 
-function GetShortName(const LongName: String): String;
-{ Gets the short version of the specified long filename. If the file does not
-  exist, or some other error occurs, it returns LongName. }
-var
-  Res: DWORD;
-begin
-  SetLength(Result, MAX_PATH);
-  repeat
-    Res := GetShortPathName(PChar(LongName), PChar(Result), ULength(Result));
-    if Res = 0 then begin
-      Result := LongName;
-      Break;
-    end;
-  until AdjustLength(Result, Res);
-end;
-
 function GetWinDir: String;
 { Returns fully qualified path of the Windows directory. Only includes a
   trailing backslash if the Windows directory is the root directory. }
@@ -753,11 +719,15 @@ begin
   { From MSDN: 32-bit applications can access the native system directory by
     substituting %windir%\Sysnative for %windir%\System32. WOW64 recognizes
     Sysnative as a special alias used to indicate that the file system should
-    not redirect the access. }
+    not redirect the access. ... Note that 64-bit applications cannot use the
+    Sysnative alias as it is a virtual directory not a real one.
+
+    Note: even though MSDN says 64-bit applications cannot *use* the alias,
+    it is still useful for them to know it, for example to prepare a path
+    to pass to a 32-bit application, or to rewrite Sysnative paths read from
+    an uninstall log created by a 32-bit installer. }
   if IsWin64 then
-    { Note: Avoiding GetWinDir here as that might not return the real Windows
-      directory under Terminal Services }
-    Result := PathExpand(AddBackslash(GetSystemDir) + '..\Sysnative') { Do not localize }
+    Result := AddBackslash(GetSystemWinDir) + 'Sysnative' { Do not localize }
   else
     Result := '';
 end;
@@ -765,6 +735,23 @@ end;
 function GetTempDir: String;
 { Returns fully qualified path of the temporary directory, with trailing
   backslash. }
+
+  procedure RestoreDeletedTempDirWithLogonSessionId(const DeletedTempDir: String);
+  { Restores a deleted temporary directory in the specific scenario described at
+    https://learn.microsoft.com/en-us/troubleshoot/windows-server/shell-experience/temp-folder-with-logon-session-id-deleted }
+  begin
+    const DirWithoutSlash = RemoveBackslashUnlessRoot(DeletedTempDir);
+    const BaseName = PathExtractName(DirWithoutSlash);
+    var BaseNameIsNumber := False;
+    for var I := Low(BaseName) to High(BaseName) do begin
+      BaseNameIsNumber := CharInSet(BaseName[I], ['0'..'9']);
+      if not BaseNameIsNumber then
+        Break;
+    end;
+    if BaseNameIsNumber then
+      CreateDirectory(PChar(DirWithoutSlash), nil);
+  end;
+
 var
   GetTempPathFunc: function(nBufferLength: DWORD; lpBuffer: LPWSTR): DWORD; stdcall;
   Buf: array[0..MAX_PATH] of Char;
@@ -781,6 +768,8 @@ begin
     { The docs say the returned path is fully qualified and ends with a
       backslash, but let's be really sure! }
     Result := AddBackslash(PathExpand(Buf));
+    if not DirExists(Result) then
+      RestoreDeletedTempDirWithLogonSessionId(Result);
     Exit;
   end;
 
@@ -942,13 +931,22 @@ begin
   Result := RegQueryValueEx(H, Name, nil, nil, nil, nil) = ERROR_SUCCESS;
 end;
 
+function RegViewToWowKeyFlag(const RegView: TRegView): REGSAM;
+begin
+  case RegView of
+    rv32Bit: Result := KEY_WOW64_32KEY;
+    rv64Bit: Result := KEY_WOW64_64KEY;
+  else
+    Result := 0;
+  end;
+end;
+
 function RegCreateKeyExView(const RegView: TRegView; hKey: HKEY; lpSubKey: PChar;
   Reserved: DWORD; lpClass: PChar; dwOptions: DWORD; samDesired: REGSAM;
   lpSecurityAttributes: PSecurityAttributes; var phkResult: HKEY;
   lpdwDisposition: PDWORD): Longint;
 begin
-  if RegView = rv64Bit then
-    samDesired := samDesired or KEY_WOW64_64KEY;
+  samDesired := samDesired or RegViewToWowKeyFlag(RegView);
   Result := RegCreateKeyEx(hKey, lpSubKey, Reserved, lpClass, dwOptions,
     samDesired, lpSecurityAttributes, phkResult, lpdwDisposition);
 end;
@@ -956,29 +954,18 @@ end;
 function RegOpenKeyExView(const RegView: TRegView; hKey: HKEY; lpSubKey: PChar;
   ulOptions: DWORD; samDesired: REGSAM; var phkResult: HKEY): Longint;
 begin
-  if RegView = rv64Bit then
-    samDesired := samDesired or KEY_WOW64_64KEY;
+  samDesired := samDesired or RegViewToWowKeyFlag(RegView);
   Result := RegOpenKeyEx(hKey, lpSubKey, ulOptions, samDesired, phkResult);
 end;
 
-var
-  RegDeleteKeyExFunc: function(hKey: HKEY;
-    lpSubKey: PWideChar; samDesired: REGSAM; Reserved: DWORD): Longint; stdcall;
+function RegDeleteKeyEx_static(hKey: HKEY; lpSubKey: LPCWSTR;
+  samDesired: REGSAM; Reserved: DWORD): Longint; stdcall;
+  external advapi32 name 'RegDeleteKeyExW';
 
 function RegDeleteKeyView(const RegView: TRegView; const Key: HKEY;
   const Name: PChar): Longint;
 begin
-  if RegView <> rv64Bit then
-    Result := RegDeleteKey(Key, Name)
-  else begin
-    if not Assigned(RegDeleteKeyExFunc) then
-      RegDeleteKeyExFunc := GetProcAddress(GetModuleHandle(advapi32),
-          'RegDeleteKeyExW');
-    if Assigned(RegDeleteKeyExFunc) then
-      Result := RegDeleteKeyExFunc(Key, Name, KEY_WOW64_64KEY, 0)
-    else
-      Result := ERROR_PROC_NOT_FOUND;
-  end;
+  Result := RegDeleteKeyEx_static(Key, Name, RegViewToWowKeyFlag(RegView), 0);
 end;
 
 function RegDeleteKeyIncludingSubkeys(const RegView: TRegView; const Key: HKEY;
@@ -1048,21 +1035,21 @@ begin
     Result := ERROR_DIR_NOT_EMPTY;
 end;
 
+function SHGetFolderPath_shell32(hwnd: HWND; csidl: Integer; hToken: THandle;
+  dwFlags: DWORD; pszPath: LPWSTR): HResult; stdcall;
+  external 'shell32.dll' name 'SHGetFolderPathW';
+
 function GetShellFolderPath(const FolderID: Integer): String;
+const
+  SHGFP_TYPE_CURRENT = 0;
 var
-  pidl: PItemIDList;
-  Buffer: array[0..MAX_PATH-1] of Char;
-  Malloc: IMalloc;
+  Buf: array[0..MAX_PATH-1] of Char;
 begin
-  Result := '';
-  if FAILED(SHGetMalloc(Malloc)) then
-    Malloc := nil;
-  if SUCCEEDED(SHGetSpecialFolderLocation(0, FolderID, pidl)) then begin
-    if SHGetPathFromIDList(pidl, Buffer) then
-      Result := Buffer;
-    if Assigned(Malloc) then
-      Malloc.Free(pidl);
-  end;
+  const Res = SHGetFolderPath_shell32(0, FolderID, 0, SHGFP_TYPE_CURRENT, Buf);
+  if Res = S_OK then
+    Result := Buf
+  else
+    Result := '';
 end;
 
 function GetCurrentUserSid: String;
@@ -1551,28 +1538,6 @@ begin
     MOVEFILE_REPLACE_EXISTING);
 end;
 
-var
-  SHAutoCompleteInitialized: Boolean;
-  SHAutoCompleteFunc: function(hwndEdit: HWND; dwFlags: dWord): LongInt; stdcall;
-
-procedure TryEnableAutoCompleteFileSystem(Wnd: HWND);
-const
-  SHACF_FILESYSTEM = $1;
-var
-  M: HMODULE;
-begin
-  if not SHAutoCompleteInitialized then begin
-    M := SafeLoadLibrary(AddBackslash(GetSystemDir) + 'shlwapi.dll',
-      SEM_NOOPENFILEERRORBOX);
-    if M <> 0 then
-      SHAutoCompleteFunc := GetProcAddress(M, 'SHAutoComplete');
-    SHAutoCompleteInitialized := True;
-  end;
-
-  if Assigned(SHAutoCompleteFunc) then
-    SHAutoCompleteFunc(Wnd, SHACF_FILESYSTEM);
-end;
-
 procedure CreateMutex(const MutexName: String);
 const
   SECURITY_DESCRIPTOR_REVISION = 1;  { Win32 constant not defined in Delphi 3 }
@@ -1631,6 +1596,40 @@ begin
   end;
 end;
 
+{ FileInformationClass is really an enum type }
+function SetFileInformationByHandle(hFile: THandle; FileInformationClass: DWORD;
+  lpFileInformation: LPVOID; dwBufferSize: DWORD): BOOL; stdcall; external kernel32;
+
+function DeleteFileOrDirByHandle(const H: THandle): Boolean;
+{ Deletes a file or directory by handle. DELETE access (Windows._DELETE in
+  Delphi) must have been requested when the handle was opened.
+  If a directory isn't empty, the function fails.
+  When False is returned, call GetLastError to get the error code.
+
+  The directory entry for the file/directory doesn't disappear until all
+  handles have been closed. This function does not request "POSIX delete
+  semantics" -- which would cause the directory entry to disappear
+  immediately, as with DeleteFile -- because it's only supported on Windows 10
+  1607 and later.
+
+  NOTE: This function should generally only be used with handles opened with
+  the FILE_FLAG_OPEN_REPARSE_POINT flag. If that flag isn't used, then the
+  function will delete the *target* of a symbolic link, not the symbolic link
+  itself, which usually isn't the intention. (The DeleteFile and
+  RemoveDirectory functions delete symbolic links, not their targets.) }
+const
+  FileDispositionInfo = 4;
+type
+  TFileDispositionInfo = record
+    DeleteFile: Boolean;  { actually the Windows BOOLEAN type, also 1-byte }
+  end;
+begin
+  var Info: TFileDispositionInfo;
+  Info.DeleteFile := True;
+  Result := SetFileInformationByHandle(H, FileDispositionInfo, @Info,
+    SizeOf(Info));
+end;
+
 function CompareInt64(const N1, N2: Int64): Integer;
 begin
   if N1 = N2 then
@@ -1646,9 +1645,113 @@ begin
   Result := Int64((UInt64(High) shl 32) or Low);
 end;
 
+function HighLowToUInt64(const High, Low: UInt32): UInt64;
+begin
+  Result := (UInt64(High) shl 32) or Low;
+end;
+
 function FindDataFileSizeToInt64(const FindData: TWin32FindData): Int64;
 begin
   Result := HighLowToInt64(FindData.nFileSizeHigh, FindData.nFileSizeLow);
+end;
+
+function FileTimeToUInt64(const FileTime: TFileTime): UInt64;
+begin
+  Result := HighLowToUInt64(FileTime.dwHighDateTime, FileTime.dwLowDateTime);
+end;
+
+function StrToWnd(const S: String): HWND;
+begin
+  Result := UInt32(StrToUInt64(S));
+end;
+
+function LastErrorIndicatesPossiblyInUse(const LastError: DWORD; const CheckAlreadyExists: Boolean): Boolean;
+begin
+  Result := (LastError = ERROR_ACCESS_DENIED) or
+            (LastError = ERROR_SHARING_VIOLATION) or
+            (CheckAlreadyExists and (LastError = ERROR_ALREADY_EXISTS));
+end;
+
+function PerformFileOperationWithRetries(const MaxRetries: Integer; const AlsoRetryOnAlreadyExists: Boolean;
+  const Op: TFileOperationFunc; const Failing: TFileOperationFailingProc; const Failed: TFileOperationFailedProc): Boolean;
+{ Performs a file operation Op. If it fails then calls Failing up to MaxRetries times. When no
+  retries remain, it calls Failed and returns False. Op should ensure LastError is always set on
+  failure. It is recommended that Failed throws an exception, rather than expecting the caller to
+  inspect the return value. Alternatively, Failed can set TryOnceMore to True to allow an extra retry. }
+begin
+  Result := PerformFileOperationWithRetries(MaxRetries, AlsoRetryOnAlreadyExists,
+    Op,
+    procedure(const LastError: Cardinal; var RetriesLeft: Integer; var NextAction: TFileOperationFailingNextAction)
+    begin
+      if RetriesLeft > 0 then begin
+        Failing(LastError);
+        Dec(RetriesLeft);
+        NextAction := naRetry;
+      end;
+    end,
+    Failed);
+end;
+
+function PerformFileOperationWithRetries(const MaxRetries: Integer; const AlsoRetryOnAlreadyExists: Boolean;
+  const Op: TFileOperationFunc; const Failing: TFileOperationFailingExProc; const Failed: TFileOperationFailedProc): Boolean;
+{ Similar to the other PerformFileOperationWithRetries, but provides fine-grained control to Failing,
+  which is now responsible for updating RetriesLeft itself, and can also request an early break.
+  Failing's NextAction defaults to *not* retry, but to stop and fail. }
+begin
+  var RetriesLeft := MaxRetries;
+  var LastError: Cardinal;
+  while not Op(LastError) do begin
+    { Does the error code indicate that it is possibly in use? }
+    if LastErrorIndicatesPossiblyInUse(LastError, AlsoRetryOnAlreadyExists) then begin
+      var NextAction := naStopAndFail;
+      Failing(LastError, RetriesLeft, NextAction);
+      if NextAction = naStopAndSucceed then
+        Break
+      else if NextAction = naRetry then
+        Continue;
+    end;
+    { Some other error occurred, or we ran out of tries }
+    SetLastError(LastError);
+    var TryOnceMore := False;
+    Failed(LastError, TryOnceMore);
+    if not TryOnceMore then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function Is64BitPEImage(const Filename: String): Boolean;
+{ Returns True if the specified file is a non-32-bit PE image, False
+  otherwise. }
+var
+  DosHeader: packed record
+    Sig: array[0..1] of AnsiChar;
+    Other: array[0..57] of Byte;
+    PEHeaderOffset: LongWord;
+  end;
+  PESigAndHeader: packed record
+    Sig: DWORD;
+    Header: TImageFileHeader;
+    OptHeaderMagic: Word;
+  end;
+begin
+  Result := False;
+  const F = TFile.Create(Filename, fdOpenExisting, faRead, fsRead);
+  try
+    if F.Read(DosHeader, SizeOf(DosHeader)) = SizeOf(DosHeader) then begin
+      if (DosHeader.Sig[0] = 'M') and (DosHeader.Sig[1] = 'Z') and
+         (DosHeader.PEHeaderOffset <> 0) then begin
+        F.Seek(DosHeader.PEHeaderOffset);
+        if F.Read(PESigAndHeader, SizeOf(PESigAndHeader)) = SizeOf(PESigAndHeader) then begin
+          if (PESigAndHeader.Sig = IMAGE_NT_SIGNATURE) and
+             (PESigAndHeader.OptHeaderMagic <> IMAGE_NT_OPTIONAL_HDR32_MAGIC) then
+            Result := True;
+        end;
+      end;
+    end;
+  finally
+    F.Free;
+  end;
 end;
 
 { TOneShotTimer }
@@ -1758,6 +1861,22 @@ begin
     function pointer visible to other threads }
   MemoryBarrier;
   FBCryptGenRandomFunc := P;
+end;
+
+{ TFileTimeHelper }
+
+procedure TFileTimeHelper.Clear;
+begin
+  { SetFileTime regards a pointer to a FILETIME structure with both members
+    set to 0 the same as a NULL pointer and we make use of that. Note that
+    7-Zip may return a value with both members set to 0 as well. }
+  dwLowDateTime := 0;
+  dwHighDateTime := 0;
+end;
+
+function TFileTimeHelper.HasTime: Boolean;
+begin
+  Result := (dwLowDateTime <> 0) or (dwHighDateTime <> 0);
 end;
 
 { TCreateProcessOutputReader }

@@ -1,7 +1,7 @@
 // Inno Setup Preprocessor
 //
-// Inno Setup (C) 1997-2025 Jordan Russell. All Rights Reserved.
-// Portions Copyright (C) 2000-2025 Martijn Laan. All Rights Reserved.
+// Inno Setup (C) 1997-2026 Jordan Russell. All Rights Reserved.
+// Portions Copyright (C) 2000-2026 Martijn Laan. All Rights Reserved.
 // Portions Copyright (C) 2001-2004 Alex Yackimoff. All Rights Reserved.
 //
 // See the ISPP help file for more documentation of the functions defined by this file
@@ -71,6 +71,11 @@
 #define HKEY_LOCAL_MACHINE_64   0x82000002UL
 #define HKEY_USERS_64           0x82000003UL
 #define HKEY_CURRENT_CONFIG_64  0x82000005UL
+#define HKEY_CLASSES_ROOT_32    0x81000000UL
+#define HKEY_CURRENT_USER_32    0x81000001UL
+#define HKEY_LOCAL_MACHINE_32   0x81000002UL
+#define HKEY_USERS_32           0x81000003UL
+#define HKEY_CURRENT_CONFIG_32  0x81000005UL
 
 #define HKCR               HKEY_CLASSES_ROOT
 #define HKCU               HKEY_CURRENT_USER
@@ -82,6 +87,11 @@
 #define HKLM64             HKEY_LOCAL_MACHINE_64
 #define HKU64              HKEY_USERS_64
 #define HKCC64             HKEY_CURRENT_CONFIG_64
+#define HKCR32             HKEY_CLASSES_ROOT_32
+#define HKCU32             HKEY_CURRENT_USER_32
+#define HKLM32             HKEY_LOCAL_MACHINE_32
+#define HKU32              HKEY_USERS_32
+#define HKCC32             HKEY_CURRENT_CONFIG_32
 
 // Exec constants
 
@@ -235,7 +245,7 @@
       Copy(PathName, 1, Local[1])
 
 #define ExtractFileDir(str PathName) \
-  RemoveBackslash(ExtractFilePath(PathName))
+  RemoveBackslashUnlessRoot(ExtractFilePath(PathName))
 
 #define ExtractFileExt(str PathName) \
   Local[0] = RPos(".", PathName), \
@@ -281,7 +291,7 @@
     S = Copy(S, 1, Index - 1) + SubStr + Copy(S, Index)
 
 #define YesNo(str S) \
-  (S = LowerCase(S)) == "yes" || S == "true" || S == "1"
+  S == "yes" || S == "true" || S == "1"
 
 #define IsDirSet(str SetupDirective) \
   YesNo(SetupSetting(SetupDirective))
@@ -296,9 +306,6 @@
   A > B ? A > C ? Int(A) : Int(C) : Int(B)
 
 #define SameText(str S1, str S2) \
-  LowerCase(S1) == LowerCase(S2)
-
-#define SameStr(str S1, str S2) \
   S1 == S2
 
 #define WarnRenamedVersion(str OldName, str NewName) \
@@ -311,6 +318,34 @@
 #define GetFileVersion(str FileName) \
   WarnRenamedVersion("GetFileVersion", "GetVersionNumbersString"), \
   GetVersionNumbersString(FileName)
+
+#sub GLS_ProcessFoundLanguagesFile
+  #define Filename FindGetFileName(GLS_FindHandle)
+  #define Name LowerCase(RemoveFileExt(Filename))
+  #define MessagesFile "compiler:Languages\" + Filename
+  #emit "Name: " + Name + "; MessagesFile: " + MessagesFile
+#endsub
+
+#define GLS_FindPathName
+#define GLS_FindHandle
+#define GLS_FindResult
+
+#sub GLS_DoFindFiles
+  #for {GLS_FindHandle = GLS_FindResult = FindFirst(GLS_FindPathName + "*.isl", 0); GLS_FindResult; GLS_FindResult = FindNext(GLS_FindHandle)} GLS_ProcessFoundLanguagesFile
+  #if GLS_FindHandle
+    #expr FindClose(GLS_FindHandle)
+  #endif
+#endsub
+
+#define GLS_FindFiles(str PathName) \
+  GLS_FindPathName = PathName, \
+  GLS_DoFindFiles
+
+#sub EmitLanguagesSection
+  #emit "[Languages]"
+  #emit "Name: english; MessagesFile: compiler:Default.isl"
+  #expr GLS_FindFiles(CompilerPath + "Languages\")
+#endsub
 
 #ifdef DisablePOptP
 # pragma parseroption -p-

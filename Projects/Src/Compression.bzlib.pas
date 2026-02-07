@@ -18,18 +18,19 @@ function BZInitCompressFunctions(Module: HMODULE): Boolean;
 function BZInitDecompressFunctions(Module: HMODULE): Boolean;
 
 type
-  TBZAlloc = function(AppData: Pointer; Items, Size: Cardinal): Pointer; stdcall;
+  { Must keep in sync with bzlib.h }
+  TBZAlloc = function(AppData: Pointer; Items, Size: Integer): Pointer; stdcall;
   TBZFree = procedure(AppData, Block: Pointer); stdcall;
   TBZStreamRec = record
     next_in: Pointer;
-    avail_in: Integer;
-    total_in: Integer;
-    total_in_hi: Integer;
+    avail_in: Cardinal;
+    total_in: Cardinal;
+    total_in_hi: Cardinal;
 
     next_out: Pointer;
-    avail_out: Integer;
-    total_out: Integer;
-    total_out_hi: Integer;
+    avail_out: Cardinal;
+    total_out: Cardinal;
+    total_out_hi: Cardinal;
 
     State: Pointer;
 
@@ -137,7 +138,7 @@ begin
   end;
 end;
 
-function BZAllocMem(AppData: Pointer; Items, Size: Cardinal): Pointer; stdcall;
+function BZAllocMem(AppData: Pointer; Items, Size: Integer): Pointer; stdcall;
 begin
   try
     GetMem(Result, Items * Size);
@@ -154,13 +155,11 @@ begin
 end;
 
 function Check(const Code: Integer; const ValidCodes: array of Integer): Integer;
-var
-  I: Integer;
 begin
   if Code = BZ_MEM_ERROR then
     OutOfMemoryError;
   Result := Code;
-  for I := Low(ValidCodes) to High(ValidCodes) do
+  for var I := Low(ValidCodes) to High(ValidCodes) do
     if ValidCodes[I] = Code then
       Exit;
   raise ECompressInternalError.CreateFmt(SBzlibInternalError, [Code]);
@@ -214,7 +213,7 @@ end;
 procedure TBZCompressor.FlushBuffer;
 begin
   if FStrm.avail_out < SizeOf(FBuffer) then begin
-    WriteProc(FBuffer, SizeOf(FBuffer) - FStrm.avail_out);
+    WriteProc(FBuffer, Cardinal(SizeOf(FBuffer) - FStrm.avail_out));
     FStrm.next_out := @FBuffer;
     FStrm.avail_out := SizeOf(FBuffer);
   end;
@@ -268,9 +267,9 @@ const
     bzDecompress* allocate is 64116 + 3600000 bytes, when decompressing data
     compressed at level 9 }
 
-function DecompressorAllocMem(AppData: Pointer; Items, Size: Cardinal): Pointer; stdcall;
+function DecompressorAllocMem(AppData: Pointer; Items, Size: Integer): Pointer; stdcall;
 begin
-  Result := TBZDecompressor(AppData).Malloc(Items * Size);
+  Result := TBZDecompressor(AppData).Malloc(Cardinal(Items * Size));
 end;
 
 procedure DecompressorFreeMem(AppData, Block: Pointer); stdcall;
@@ -312,16 +311,16 @@ begin
 
   { Did bzlib request more memory than we reserved? This shouldn't happen
     unless this unit is used with a different version of bzlib that allocates
-    more memory. Note: The funky Cardinal casts are there to convince
-    Delphi (2) to do an unsigned compare. }
-  if Cardinal(Cardinal(FHeapNextFree) - Cardinal(FHeapBase) + Bytes) > Cardinal(DecompressorHeapSize) then
+    more memory. }
+  const HeapSize = NativeUInt(PByte(FHeapNextFree) - PByte(FHeapBase)) + Bytes;
+  if HeapSize > DecompressorHeapSize then
     raise ECompressInternalError.Create(SBzlibAllocError);
 
   if VirtualAlloc(FHeapNextFree, Bytes, MEM_COMMIT, PAGE_READWRITE) = nil then
     Result := nil
   else begin
     Result := FHeapNextFree;
-    Inc(Cardinal(FHeapNextFree), Bytes);
+    Inc(PByte(FHeapNextFree), Bytes);
   end;
 end;
 

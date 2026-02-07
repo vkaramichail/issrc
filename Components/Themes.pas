@@ -2,7 +2,7 @@ unit Themes;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -112,8 +112,8 @@ type
 
   TCustomStyleEngine = class
     public
-      class procedure RegisterStyleHook(ControlClass: TClass; StyleHookClass: TStyleHookClass);
-      class procedure UnRegisterStyleHook(ControlClass: TClass; StyleHookClass: TStyleHookClass);
+      class procedure RegisterStyleHook(ControlClass: TClass; StyleHookClass: TStyleHookClass); static;
+      class procedure UnRegisterStyleHook(ControlClass: TClass; StyleHookClass: TStyleHookClass); static;
   end;
 
   TThemedElementDetails = TObject;
@@ -123,6 +123,8 @@ type
     public
       function DrawElement(DC: HDC; Details: TThemedElementDetails; const R: TRect;
         ClipRect: PRect = nil; DPI: Integer = 0): Boolean;
+      function DrawParentBackground(Window: HWND; Target: HDC;
+        Details: TThemedElementDetails; OnlyIfTransparent: Boolean; const Bounds: TRect): Boolean;
       function Enabled: Boolean;
       function GetElementColor(Details: TThemedElementDetails; ElementColor: TElementColor; out Color: TColor): Boolean;
       function GetElementDetails(Detail: TThemedButton): TThemedElementDetails; overload;
@@ -136,14 +138,19 @@ type
   TSystemHook = (shMenus, shDialogs, shToolTips);
   TSystemHooks = set of TSystemHook;
 
+  TFormBorderStyle = (fbsCurrentStyle, fbsSystemStyle);
+
   TStyleManager = class
     type TStyleServicesHandle = type Pointer;
-    class var FSystemHooks: TSystemHooks;
-    class procedure SetStyle(Handle: TStyleServicesHandle);
-    class property SystemHooks: TSystemHooks read FSystemHooks write FSystemHooks;
+    class var AutoDiscoverStyleResources: Boolean;
+    class var SystemHooks: TSystemHooks;
+    class var SystemStyleName: String;
+    class var FormBorderStyle: TFormBorderStyle;
+    class constructor Create;
+    class procedure SetStyle(Handle: TStyleServicesHandle); static;
     class function TryLoadFromResource(Instance: HINST; const ResourceName: string;
-      ResourceType: PChar; var Handle: TStyleServicesHandle): Boolean;
-    class function TrySetStyle(const Name: string; ShowErrorDialog: Boolean = True): Boolean;
+      ResourceType: PChar; var Handle: TStyleServicesHandle): Boolean; static;
+    class function TrySetStyle(const Name: string; ShowErrorDialog: Boolean = True): Boolean; static;
   end;
 
   { Override ComCtrls }
@@ -201,6 +208,12 @@ begin
   Result := False;
 end;
 
+function TCustomStyleServices.DrawParentBackground(Window: HWND; Target: HDC;
+  Details: TThemedElementDetails; OnlyIfTransparent: Boolean; const Bounds: TRect): Boolean;
+begin
+  Result := False;
+end;
+
 function TCustomStyleServices.Enabled: Boolean;
 begin
   Result := False;
@@ -243,6 +256,11 @@ begin
 end;
 
 { TStyleManager }
+
+class constructor TStyleManager.Create;
+begin
+  FormBorderStyle := fbsSystemStyle;
+end;
 
 class procedure TStyleManager.SetStyle(Handle: TStyleServicesHandle);
 begin

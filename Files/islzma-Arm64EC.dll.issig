@@ -1,0 +1,8 @@
+format issig-v2
+file-name "islzma-Arm64EC.dll"
+file-size 177296
+file-hash 46926ad9160cfa5991a22fdf8d162a6527ab08ad011ce4edf82efb27dcdf8f40
+file-tag ""
+key-id def0147c3bbc17ab99bf7b7a9c2de1390283f38972152418d7c2a4a7d7131a38
+sig-r fa385b6e092b5efe948940869cd5de37952cec1fb0aee1bd00b2aca2de81a433
+sig-s bd11bf840053c5b79204c74d3cd3bb8f96ddf689b0ad25bddd0b5778ebf12e54

@@ -2,7 +2,7 @@ unit Setup.ExtractFileFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -20,7 +20,6 @@ uses
   Windows, SysUtils,
   PathFunc,
   Shared.CommonFunc, Shared.FileClass, Shared.Struct,
-  SetupLdrAndSetup.RedirFunc,
   Setup.InstFunc, Setup.FileExtractor, Setup.LoggingFunc, Setup.MainFunc;
 
 procedure InternalExtractTemporaryFile(const DestName: String;
@@ -38,7 +37,7 @@ begin
   { Does not disable FS redirection, like everything else working on the temp dir }
 
   if CreateDirs then
-    ForceDirectories(False, PathExtractPath(DestFile));
+    ForceDirectories(PathExtractPath(DestFile));
   DestF := TFile.Create(DestFile, fdCreateAlways, faWrite, fsNone);
   try
     try
@@ -46,11 +45,13 @@ begin
       FileExtractor.DecompressFile(CurFileLocation^, DestF, nil,
         not (foDontVerifyChecksum in CurFile^.Options));
 
-      if floTimeStampInUTC in CurFileLocation^.Flags then
-        CurFileDate := CurFileLocation^.SourceTimeStamp
-      else
-        LocalFileTimeToFileTime(CurFileLocation^.SourceTimeStamp, CurFileDate);
-      SetFileTime(DestF.Handle, nil, nil, @CurFileDate);
+      if CurFileLocation^.TimeStamp.HasTime then begin
+        if floTimeStampInUTC in CurFileLocation^.Flags then
+          CurFileDate := CurFileLocation^.TimeStamp
+        else
+          LocalFileTimeToFileTime(CurFileLocation^.TimeStamp, CurFileDate);
+        SetFileTime(DestF.Handle, nil, nil, @CurFileDate);
+      end;
     finally
       DestF.Free;
     end;
@@ -58,7 +59,7 @@ begin
     DeleteFile(DestFile);
     raise;
   end;
-  AddAttributesToFile(False, DestFile, CurFile^.Attribs);
+  AddAttributesToFile(DestFile, CurFile^.Attribs);
 end;
 
 procedure ExtractTemporaryFile(const BaseName: String);
@@ -81,15 +82,14 @@ procedure ExtractTemporaryFile(const BaseName: String);
 
 var
   EscapedBaseName: String;
-  CurFileNumber: Integer;
   CurFile: PSetupFileEntry;
 begin
   { We compare BaseName to the filename portion of TSetupFileEntry.DestName
     which has braces escaped, but BaseName does not; escape it to match }
   EscapedBaseName := EscapeBraces(BaseName);
-  for CurFileNumber := 0 to Entries[seFile].Count-1 do begin
+  for var CurFileNumber := 0 to Entries[seFile].Count-1 do begin
     CurFile := PSetupFileEntry(Entries[seFile][CurFileNumber]);
-    if (CurFile^.LocationEntry <> -1) and (CompareText(PathExtractName(CurFile^.DestName), EscapedBaseName) = 0) then begin
+    if (CurFile^.LocationEntry <> -1) and SameText(PathExtractName(CurFile^.DestName), EscapedBaseName) then begin
       InternalExtractTemporaryFile(BaseName, CurFile, Entries[seFileLocation][CurFile^.LocationEntry], False);
       Exit;
     end;
@@ -100,7 +100,6 @@ end;
 function ExtractTemporaryFiles(const Pattern: String): Integer;
 var
   LowerPattern, DestName: String;
-  CurFileNumber: Integer;
   CurFile: PSetupFileEntry;
 begin
   if Length(Pattern) >= MAX_PATH then
@@ -109,11 +108,13 @@ begin
   LowerPattern := PathLowercase(Pattern);
   Result := 0;
 
-  for CurFileNumber := 0 to Entries[seFile].Count-1 do begin
+  for var CurFileNumber := 0 to Entries[seFile].Count-1 do begin
     CurFile := PSetupFileEntry(Entries[seFile][CurFileNumber]);
     if CurFile^.LocationEntry <> -1 then begin
-      { Use ExpandConstEx2 to unescape any braces not in an embedded constant,
-        while leaving constants unexpanded }
+      (* Use ExpandConstEx2 to unescape any braces not in an embedded constant,
+         while leaving constants unexpanded. No need to call
+         PathConvertSuperToNormal to avoid matching ? from '\\?\', because
+         DestName is not a true path, but something like '{app}\MyProg.*'. *)
       DestName := ExpandConstEx2(CurFile^.DestName, [''], False);
       if WildcardMatch(PChar(PathLowercase(DestName)), PChar(LowerPattern)) then begin
         Delete(DestName, 1, PathDrivePartLengthEx(DestName, True)); { Remove any drive part }

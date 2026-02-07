@@ -16,7 +16,7 @@ unit BitmapImage;
 interface
 
 uses
-  Windows, Controls, Graphics, Classes, Imaging.pngimage;
+  Windows, ShellAPI, Controls, Graphics, Classes, Imaging.pngimage;
 
 type
   TPaintEvent = procedure(Sender: TObject; Canvas: TCanvas; var ARect: TRect) of object;
@@ -30,6 +30,7 @@ type
     BackColor: TColor;
     Bitmap: TBitmap;
     Center: Boolean;
+    Opacity: Byte;
     PngImage: TPngImage;
     ReplaceColor: TColor;
     ReplaceWithColor: TColor;
@@ -40,7 +41,10 @@ type
     procedure Init(const AControl: TControl; const AAutoSizeExtraWidth: Integer = 0;
       const AAutoSizeExtraHeight: Integer = 0);
     procedure DeInit;
+    class function AdjustColorForStyle(const Control: TControl; const Color: TColor): TColor; static;
+    function GetInitializeSize(const AscendingTrySizes: array of Integer): Integer;
     function InitializeFromIcon(const Instance: HINST; const Name: PChar; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+    function InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
     procedure BitmapChanged(Sender: TObject);
     procedure PngImageChanged(Sender: TObject);
     procedure SetAutoSize(Sender: TObject; Value: Boolean);
@@ -48,6 +52,7 @@ type
     procedure SetBitmap(Value: TBitmap);
     procedure SetCenter(Sender: TObject; Value: Boolean);
     procedure SetGraphic(Value: TGraphic);
+    procedure SetOpacity(Sender: TObject; Value: Byte);
     procedure SetPngImage(Value: TPngImage);
     procedure SetReplaceColor(Sender: TObject; Value: TColor);
     procedure SetReplaceWithColor(Sender: TObject; Value: TColor);
@@ -62,6 +67,7 @@ type
     procedure SetBackColor(Value: TColor);
     procedure SetBitmap(Value: TBitmap);
     procedure SetCenter(Value: Boolean);
+    procedure SetOpacity(Value: Byte);
     procedure SetGraphic(Value: TGraphic);
     procedure SetPngImage(Value: TPngImage);
     procedure SetReplaceColor(Value: TColor);
@@ -75,6 +81,7 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     function InitializeFromIcon(const Instance: HINST; const Name: PChar; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+    function InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
     property Bitmap: TBitmap read FImpl.Bitmap write SetBitmap;
     property Graphic: TGraphic write SetGraphic;
   published
@@ -86,6 +93,7 @@ type
     property DragCursor;
     property DragMode;
     property Enabled;
+    property Opacity: Byte read FImpl.Opacity write SetOpacity default 255;
     property ParentShowHint;
     property PngImage: TPngImage read FImpl.PngImage write SetPngImage;
     property PopupMenu;
@@ -111,7 +119,7 @@ procedure Register;
 implementation
 
 uses
-  SysUtils, Math, Themes, Resample;
+  CommCtrl, SysUtils, Math, Themes, Resample;
 
 procedure Register;
 begin
@@ -129,6 +137,7 @@ begin
   BackColor := clNone;
   Bitmap := TBitmap.Create;
   Bitmap.OnChange := BitmapChanged;
+  Opacity := 255;
   PngImage := TPngImage.Create;
   PngImage.OnChange := PngImageChanged;
   ReplaceColor := clNone;
@@ -143,21 +152,43 @@ begin
   FreeAndNil(Bitmap);
 end;
 
-function TBitmapImageImplementation.InitializeFromIcon(const Instance: HINST; const Name: PChar; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+class function TBitmapImageImplementation.AdjustColorForStyle(const Control: TControl;
+  const Color: TColor): TColor;
+begin
+  Result := Color;
+  if (Result = clBtnFace) or (Result = clWindow) then begin
+    var LStyle := StyleServices(Control);
+    if not LStyle.Enabled or LStyle.IsSystemStyle then
+      LStyle := nil;
+    if LStyle <> nil then begin
+      if Result = clBtnFace then
+        Result := LStyle.GetStyleColor(scPanel)
+      else
+        Result := LStyle.GetStyleColor(scWindow);
+    end;
+  end;
+end;
+
+function TBitmapImageImplementation.GetInitializeSize(const AscendingTrySizes: array of Integer): Integer;
 begin
   { Find the largest regular icon size smaller than the scaled image }
-  var Size := 0;
+  Result := 0;
   for var I := Length(AscendingTrySizes)-1 downto 0 do begin
     if (FControl.Width >= AscendingTrySizes[I]) and (FControl.Height >= AscendingTrySizes[I]) then begin
-      Size := AscendingTrySizes[I];
+      Result := AscendingTrySizes[I];
       Break;
     end;
   end;
-  if Size = 0 then
-    Size := Min(FControl.Width, FControl.Height);
+  if Result = 0 then
+    Result := Min(FControl.Width, FControl.Height);
+end;
+
+function TBitmapImageImplementation.InitializeFromIcon(const Instance: HINST; const Name: PChar; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+begin
+  const Size = GetInitializeSize(AscendingTrySizes);
 
   { Load the desired icon }
-  var Flags := LR_DEFAULTCOLOR;
+  var Flags: UINT := LR_DEFAULTCOLOR;
   if Instance = 0 then
     Flags := Flags or LR_LOADFROMFILE;
   var Handle := LoadImage(Instance, Name, IMAGE_ICON, Size, Size, Flags);
@@ -175,6 +206,7 @@ begin
       { Set bitmap }
       AutoSize := False;
       BackColor := BkColor;
+      Stretch := True;
       Bitmap.Assign(Icon);
 
       Result := True;
@@ -183,6 +215,56 @@ begin
     end;
   end else
     Result := False;
+end;
+
+const
+  IID_IImageList: TGUID = '{46EB5926-582E-4017-9FDF-E8998DAA0950}';
+
+function TBitmapImageImplementation.InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+begin
+  { Currently this function always fails on Wine: SHGetStockIconInfo succeeds but simply always
+    returns -1 as iSysImageIndex, which makes ImageList_GetIcon fail }
+
+  Result := False;
+
+  var SHStockIconInfo: TSHStockIconInfo;
+  SHStockIconInfo.cbSize := SizeOf(SHStockIconInfo);
+  if Succeeded(SHGetStockIconInfo(siid, SHGSI_SYSICONINDEX, SHStockIconInfo)) then begin
+   var ImageList: HIMAGELIST;
+    { The SHGetImageList documentation remarks that SHIL_SMALL and SHIL_LARGE are DPI-aware. However
+      because this does not provide per-monitor DPI awareness, we always use SHIL_JUMBO and perform
+      scaling ourselves. It also remarks that "the IImageList pointer type, such as that returned in
+      the ppv parameter can be cast as an HIMAGELIST as needed", and we make use of that. }
+    const Size = GetInitializeSize(AscendingTrySizes);
+    var iImageList: Integer;
+    if Size > 24 then
+      iImageList := SHIL_JUMBO
+    else
+      iImageList := SHIL_EXTRALARGE; { For small images use SHIL_EXTRALARGE, which should be 48x48 at least }
+    if Succeeded(SHGetImageList(iImageList, IID_IImageList, Pointer(ImageList))) then begin
+      var Handle := ImageList_GetIcon(ImageList, SHStockIconInfo.iSysImageIndex, ILD_TRANSPARENT);
+      if Handle <> 0 then begin
+        const Icon = TIcon.Create;
+        try
+          Icon.Handle := Handle;
+
+          { Set sizes (overrides any scaling) }
+          FControl.Width := Size;
+          FControl.Height := Size;
+
+          { Set bitmap }
+          AutoSize := False;
+          BackColor := BkColor;
+          Stretch := True;
+          Bitmap.Assign(Icon);
+
+          Result := True;
+        finally
+          Icon.Free;
+        end;
+      end;
+    end;
+  end;
 end;
 
 procedure TBitmapImageImplementation.BitmapChanged(Sender: TObject);
@@ -234,6 +316,14 @@ begin
     Bitmap.Assign(Value);
 end;
 
+procedure TBitmapImageImplementation.SetOpacity(Sender: TObject; Value: Byte);
+begin
+  if Opacity <> Value then begin
+    Opacity := Value;
+    BitmapChanged(Sender);
+  end;
+end;
+
 procedure TBitmapImageImplementation.SetPngImage(Value: TPngImage);
 begin
   PngImage.Assign(Value);
@@ -275,7 +365,7 @@ begin
 
   var W, H: Integer;
   var Bmp: TBitmap;
-  if Stretch then begin
+  if Stretch and not Bitmap.Empty then begin
     W := R.Width;
     H := R.Height;
     Bmp := StretchedBitmap;
@@ -306,8 +396,11 @@ begin
   end;
 
   if (BackColor <> clNone) and (Is32Bit or (Bmp.Width < FControl.Width) or (Bmp.Height < FControl.Height)) then begin
+    var BrushColor := BackColor;
+    if Sender is TControl then
+      BrushColor := AdjustColorForStyle(TControl(Sender), BrushColor);
     Canvas.Brush.Style := bsSolid;
-    Canvas.Brush.Color := BackColor;
+    Canvas.Brush.Color := BrushColor;
     Canvas.FillRect(R);
   end;
 
@@ -317,22 +410,27 @@ begin
     Canvas.Rectangle(0, 0, FControl.Width, FControl.Height);
   end;
 
-  var X := R.Left;
-  var Y := R.Top;
-  if Center then begin
-    Inc(X, (R.Width - W) div 2);
-    if X < 0 then
-      X := 0;
-    Inc(Y, (R.Height - H) div 2);
-    if Y < 0 then
-      Y := 0;
-  end;
 
-  if not Is32bit and (ReplaceColor <> clNone) and (ReplaceWithColor <> clNone) then begin
-    Canvas.Brush.Color := ReplaceWithColor;
-    Canvas.BrushCopy(Rect(X, Y, X + W, Y + H), Bmp, Rect(0, 0, Bmp.Width, Bmp.Height), ReplaceColor);
-  end else
-    Canvas.Draw(X, Y, Bmp);
+  if not Bmp.Empty then begin
+    var X := R.Left;
+    var Y := R.Top;
+    if Center then begin
+      Inc(X, (R.Width - W) div 2);
+      if X < 0 then
+        X := 0;
+      Inc(Y, (R.Height - H) div 2);
+      if Y < 0 then
+        Y := 0;
+    end;
+
+    if not Is32bit and (ReplaceColor <> clNone) and (ReplaceWithColor <> clNone) then begin
+      Canvas.Brush.Color := ReplaceWithColor;
+      Canvas.BrushCopy(Rect(X, Y, X + W, Y + H), Bmp, Rect(0, 0, Bmp.Width, Bmp.Height), ReplaceColor);
+    end else if Opacity <> 255 then
+      Canvas.Draw(X, Y, Bmp, Opacity)
+    else
+      Canvas.Draw(X, Y, Bmp);
+  end;
 
   if Assigned(OnPaint) then
     OnPaint(Sender, Canvas, R);
@@ -364,6 +462,11 @@ begin
   Result := FImpl.InitializeFromIcon(HInstance, Name, BkColor, AscendingTrySizes);
 end;
 
+function TBitmapImage.InitializeFromStockIcon(const Siid: SHSTOCKICONID; const BkColor: TColor; const AscendingTrySizes: array of Integer): Boolean;
+begin
+  Result := FImpl.InitializeFromStockIcon(siid, BkColor, AscendingTrySizes);
+end;
+
 procedure TBitmapImage.SetAutoSize(Value: Boolean);
 begin
   FImpl.SetAutoSize(Self, Value);
@@ -387,6 +490,11 @@ end;
 procedure TBitmapImage.SetGraphic(Value: TGraphic);
 begin
   FImpl.SetGraphic(Value);
+end;
+
+procedure TBitmapImage.SetOpacity(Value: Byte);
+begin
+  FImpl.SetOpacity(Self, Value);
 end;
 
 procedure TBitmapImage.SetPngImage(Value: TPngImage);
